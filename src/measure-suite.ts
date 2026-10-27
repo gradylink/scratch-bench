@@ -22,7 +22,7 @@ export interface Measured {
 }
 
 export type LaunchLike = Pick<Launcher, "display"> & {
-  command(sb3: string): Command;
+  command(sb3: string, variant?: Variant | null): Command;
 };
 
 export const measureSuite = async (
@@ -41,7 +41,7 @@ export const measureSuite = async (
     let run: RunResult;
     let display = null;
     try {
-      let command = withVariant(launcher.command(sb3), o.variant);
+      let command = withVariant(launcher.command(sb3, o.variant), o.variant);
       if (launcher.display) {
         display = await startDisplay(o.displayKind);
         displayName = display.backend;

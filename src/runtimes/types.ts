@@ -6,7 +6,8 @@ export interface Command {
 }
 
 export interface Launcher {
-  command(sb3: string): Command;
+  /** `variant` is the VM mode being run, for runtimes whose modes are different programs rather than an env var. */
+  command(sb3: string, variant?: Variant | null): Command;
   display?: boolean;
 }
 
@@ -63,7 +64,8 @@ export interface Pin {
 }
 
 export interface HistoricLaunch {
-  command(sb3: string): Command;
+  /** `variant` is the VM mode being run, for runtimes whose modes are different programs rather than an env var. */
+  command(sb3: string, variant?: Variant | null): Command;
   display?: boolean;
   note?: string;
 }

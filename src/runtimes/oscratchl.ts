@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { RUNTIME_DIR } from "../paths.ts";
+import { COMPILER_VARIANTS } from "../variants.ts";
 import { run } from "../webbundle.ts";
 import {
   compile,
@@ -15,6 +16,7 @@ const ROOT_DIR = path.join(RUNTIME_DIR, "oscratchl");
 const NAME = "oscratchl";
 
 let binary: string | undefined;
+let runtimeSource: string | undefined;
 
 const git = async (dir: string, ...args: string[]): Promise<string> => {
   const proc = Bun.spawn(["git", "-C", dir, ...args], {
@@ -60,15 +62,17 @@ export const oscratchl: Runtime = {
   async setup({ offline }): Promise<SetupInfo> {
     if (process.env.OSCRATCHL_BINARY) {
       binary = path.resolve(process.env.OSCRATCHL_BINARY);
+      runtimeSource = undefined;
       if (!fs.existsSync(binary)) {
         throw new Error(`OSCRATCHL_BINARY ${binary} does not exist`);
       }
-      return { version: "custom", detail: { binary } };
+      return { version: "custom", detail: { binary }, variants: COMPILER_VARIANTS };
     }
 
     const { dir, own } = await source(offline);
     const commit = await git(dir, "rev-parse", "HEAD");
     binary = own ? path.join(dir, NAME) : path.join(ROOT_DIR, "bin", NAME);
+    runtimeSource = path.join(dir, "src");
     const stamp = `${binary}.commit`;
     const built = !fs.existsSync(binary)
       ? null
@@ -100,6 +104,7 @@ export const oscratchl: Runtime = {
       Number(await git(dir, "log", "-1", "--format=%ct", "HEAD")) * 1000;
     return {
       version: commit.slice(0, 7),
+      variants: COMPILER_VARIANTS,
       detail: {
         commit,
         repo: REPO,
@@ -110,6 +115,11 @@ export const oscratchl: Runtime = {
       },
     };
   },
-  headless: { command: (sb3) => headlessCommand(binary!, sb3) },
-  gui: { display: true, command: (sb3) => windowCommand(binary!, sb3) },
+  headless: {
+    command: (sb3, v) => headlessCommand(binary!, sb3, runtimeSource, v),
+  },
+  gui: {
+    display: true,
+    command: (sb3, v) => windowCommand(binary!, sb3, runtimeSource, v),
+  },
 };

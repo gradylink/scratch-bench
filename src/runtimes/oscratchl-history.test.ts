@@ -5,8 +5,10 @@ import path from "node:path";
 import { runOnce } from "../measure.ts";
 import { oscratchlHistory } from "./oscratchl-history.ts";
 import type { Suite } from "../suites.ts";
+import type { Variant } from "./types.ts";
 
 let tmp: string;
+let project: string;
 const shas: Record<string, string> = {};
 const suite = {
   id: "parity",
@@ -46,10 +48,18 @@ beforeAll(() => {
     shas[date.slice(0, 10)] = git(repo, undefined, "rev-parse", "HEAD");
   }
   const fake = path.join(tmp, "fake-osl");
+  // The built "oscratchl" handles `<sb3> --compile -o OUT` by copying itself, so the compiled program prints the same.
   fs.writeFileSync(
     fake,
-    '#!/bin/sh\n# usage: fake-osl compile src/main.osl -o OUT\nn=$(cat "$2")\nprintf \'#!/bin/sh\\necho "status line"\\necho "Sprite1: [PASSED] All Tests Were Successful: %s/10"\\n\' "$n" > "$4"\nchmod +x "$4"\n',
+    `#!/bin/sh
+# usage: fake-osl compile src/main.osl -o OUT
+n=$(cat "$2")
+printf '#!/bin/sh\\nif [ "$2" = --compile ]; then cp "$0" "$4"; exit 0; fi\\necho "status line"\\necho "Sprite1: [PASSED] All Tests Were Successful: %s/10"\\n' "$n" > "$4"
+chmod +x "$4"
+`,
   );
+  project = path.join(tmp, "x.sb3");
+  fs.writeFileSync(project, "project");
   fs.chmodSync(fake, 0o755);
   process.env.OSL_BIN = fake;
   process.env.OSCRATCHL_REPO = repo;
@@ -85,14 +95,14 @@ describe("oscratchl history", () => {
     const pin = (await resolve("2026-10-05", "parity"))!;
     const launch = await oscratchlHistory.custom!.build(pin, "parity");
     expect(launch.display).toBe(true);
-    const r = await runOnce(launch.command("x.sb3"), suite, 20_000);
+    const r = await runOnce(launch.command(project), suite, 20_000);
     expect(r.ok).toBe(true);
     expect(r.lines).toEqual(["[PASSED] All Tests Were Successful: 8/10"]);
     const newer = await oscratchlHistory.custom!.build(
       (await resolve("2026-10-20", "parity"))!,
       "parity",
     );
-    expect((await runOnce(newer.command("x.sb3"), suite, 20_000)).lines[0])
+    expect((await runOnce(newer.command(project), suite, 20_000)).lines[0])
       .toContain("10/10");
   });
 
@@ -100,14 +110,31 @@ describe("oscratchl history", () => {
     const pin = (await resolve("2026-10-20", "performance"))!;
     const launch = await oscratchlHistory.custom!.build(pin, "performance");
     expect(launch.display).toBe(false);
-    const cmd = launch.command("x.sb3");
+    const cmd = launch.command(project);
     expect(cmd.cmd).toContain("--headless");
+    expect(path.basename(cmd.cmd[0]!)).toStartWith("compiled-");
     expect(
       fs.readFileSync(
         path.join(path.dirname(cmd.cmd[0]!), "fonts", "f.txt"),
         "utf8",
       ),
     ).toBe("font");
+  });
+
+  test("the compiler mode runs the --compile executable and the interpreter mode runs the project directly", async () => {
+    const [compilerMode, interpreterMode] = oscratchlHistory.variants as Variant[];
+    const pin = (await resolve("2026-10-20", "performance"))!;
+    const launch = await oscratchlHistory.custom!.build(pin, "performance");
+    const compiledCmd = launch.command(project, compilerMode).cmd;
+    const interpretedCmd = launch.command(project, interpreterMode).cmd;
+    expect(path.basename(compiledCmd[0]!)).toStartWith("compiled-");
+    expect(compiledCmd).not.toContain(project);
+    expect(path.basename(interpretedCmd[0]!)).toBe("oscratchl");
+    expect(interpretedCmd[1]).toBe(project);
+    for (const cmd of [compiledCmd, interpretedCmd]) {
+      const r = await runOnce({ ...launch.command(project), cmd }, suite, 20_000);
+      expect(r.lines[0]).toContain("10/10");
+    }
   });
 
   test("a compiler that fails gives an error that says what to set", async () => {
