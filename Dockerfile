@@ -6,18 +6,18 @@ FROM golang:${GO_VERSION}-trixie AS osl
 ARG OSL_REPO=https://git.rotur.dev/osl/.go
 ARG OSL_REF=c24c464307ca00ff93fa7f5c88c55f5431abd597
 RUN git init -q /osl && cd /osl && git remote add origin "$OSL_REPO" \
- && git fetch -q --depth 1 origin "$OSL_REF" && git checkout -q FETCH_HEAD \
- && go build -o /usr/local/bin/osl .
+    && git fetch -q --depth 1 origin "$OSL_REF" && git checkout -q FETCH_HEAD \
+    && go build -o /usr/local/bin/osl .
 
 FROM node:${NODE_VERSION}-trixie-slim AS base
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git gh tar unzip procps xauth \
-      chromium fonts-liberation xvfb \
-      build-essential cmake ninja-build pkg-config \
-      libcurl4-openssl-dev libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-      libgl1-mesa-dev libasound2-dev libsdl2-dev \
- && rm -rf /var/lib/apt/lists/*
+    ca-certificates curl git gh tar unzip procps xauth \
+    chromium fonts-liberation xvfb \
+    build-essential cmake ninja-build pkg-config \
+    libcurl4-openssl-dev libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+    libgl1-mesa-dev libasound2-dev libsdl2-dev librsvg2-2 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=osl /usr/local/go /usr/local/go
 COPY --from=osl /usr/local/bin/osl /usr/local/bin/osl

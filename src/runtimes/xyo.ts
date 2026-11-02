@@ -20,10 +20,17 @@ import type { Runtime, SetupInfo, Variant } from "./types.ts";
 //   XYO_JIT_MODE of the variant, so the JIT and the interpreter are measured as
 //               two variants of one runtime, like the other VMs' compiler and
 //               interpreter modes.
+//
+// By default the latest verified Linux release is downloaded. Set XYO_SOURCE=source
+// to use the source checkout and CMake build instead, or XYO_BIN to use a local binary.
 
 const REPO = process.env.XYO_REPO ?? "https://github.com/pnsk-lab/xyo-cpp.git";
+const RELEASE_API =
+  process.env.XYO_RELEASE_API ??
+  "https://api.github.com/repos/pnsk-lab/xyo-cpp/releases/latest";
 const CLONE_DIR = path.join(RUNTIME_DIR, "xyo-cpp");
 const CACHE_DIR = path.join(RUNTIME_DIR, "xyo-build");
+const RELEASE_DIR = path.join(RUNTIME_DIR, "xyo-release");
 const AOT_DIR = path.join(RUNTIME_DIR, "xyo-aot");
 
 const log = (s: string) => console.error(`[xyo-cpp] ${s}`);
@@ -53,6 +60,116 @@ const spawnChecked = async (
     );
   }
   return { out, err };
+};
+
+const download = async (url: string): Promise<Uint8Array> => {
+  const response = await fetch(url, {
+    headers: { "User-Agent": "scratch-bench/xyo-cpp-runtime" },
+  });
+  if (!response.ok) {
+    throw new Error(`download failed (${response.status}): ${url}`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+};
+
+const releaseBinary = async (offline: boolean): Promise<{
+  binary: string;
+  version: string;
+  detail: Record<string, string>;
+}> => {
+  const archiveName = process.arch === "x64"
+    ? "xyo-linux-x86_64.tar.gz"
+    : null;
+  if (!archiveName) {
+    throw new Error(
+      `no xyo-cpp release asset for Linux architecture "${process.arch}"`,
+    );
+  }
+
+  const dir = path.join(RELEASE_DIR, archiveName.replace(/\.tar\.gz$/, ""));
+  const bin = path.join(dir, "xyo");
+  const marker = path.join(dir, ".verified");
+  const cached = (): {
+    binary: string;
+    version: string;
+    detail: Record<string, string>;
+  } | null => {
+    if (!fs.existsSync(bin) || !fs.existsSync(marker)) return null;
+    return {
+      binary: bin,
+      version: fs.readFileSync(marker, "utf8").trim(),
+      detail: { binary: bin, source: "GitHub release" },
+    };
+  };
+  if (offline) {
+    const result = cached();
+    if (result) return result;
+    throw new Error(
+      `no cached xyo-cpp release at ${dir}; run once without --offline`,
+    );
+  }
+
+  let release: {
+    tag_name?: string;
+    assets?: { name: string; browser_download_url: string }[];
+  };
+  try {
+    release = JSON.parse(new TextDecoder().decode(await download(RELEASE_API)));
+  } catch (e) {
+    throw new Error(
+      `could not read latest xyo-cpp release: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
+  const version = release.tag_name;
+  const assets = release.assets ?? [];
+  const archive = assets.find((x) => x.name === archiveName);
+  const sums = assets.find((x) => x.name === "SHA256SUMS.txt");
+  if (!version || !archive || !sums) {
+    throw new Error(
+      `latest xyo-cpp release is missing ${archiveName} or SHA256SUMS.txt`,
+    );
+  }
+  const result = cached();
+  if (result && result.version === version) return result;
+
+  log(`downloading xyo-cpp ${version}`);
+  const archiveBytes = await download(archive.browser_download_url);
+  const sumsText = new TextDecoder().decode(await download(sums.browser_download_url));
+  const expected = sumsText.match(
+    new RegExp(`^([0-9a-fA-F]{64})\\s+\\*?${archiveName}$`, "m"),
+  )?.[1]?.toLowerCase();
+  if (!expected) {
+    throw new Error(`SHA256SUMS.txt has no checksum for ${archiveName}`);
+  }
+  const actual = new Bun.CryptoHasher("sha256").update(archiveBytes).digest(
+    "hex",
+  );
+  if (actual !== expected) {
+    throw new Error(
+      `checksum mismatch for ${archiveName}: expected ${expected}, got ${actual}`,
+    );
+  }
+
+  const tmp = `${dir}.tmp-${process.pid}`;
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const archivePath = path.join(tmp, archiveName);
+  await Bun.write(archivePath, archiveBytes);
+  await spawnChecked(["tar", "-xzf", archivePath, "-C", tmp]);
+  if (!fs.existsSync(path.join(tmp, "xyo"))) {
+    throw new Error(`release archive did not contain xyo: ${archiveName}`);
+  }
+  fs.rmSync(path.join(tmp, archiveName));
+  fs.writeFileSync(path.join(tmp, ".verified"), version + "\n");
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.renameSync(tmp, dir);
+  return {
+    binary: bin,
+    version,
+    detail: { binary: bin, source: "GitHub release", release: version },
+  };
 };
 
 const git = async (cwd: string, ...args: string[]): Promise<string> => {
@@ -222,6 +339,11 @@ export const xyoCpp: Runtime = {
       }
       binaryPath = path.resolve(override);
       detail.binary = binaryPath;
+    } else if (process.env.XYO_SOURCE !== "source") {
+      const release = await releaseBinary(offline);
+      binaryPath = release.binary;
+      version = release.version;
+      Object.assign(detail, release.detail);
     } else {
       src = await resolveSource(offline);
       binaryPath = await build(src);
