@@ -9,6 +9,7 @@ import { penguinmodPort } from "./penguinmod-port.ts";
 import { scratch } from "./scratch.ts";
 import { scratchEverywhere } from "./scratch-everywhere.ts";
 import { turbowarp } from "./turbowarp.ts";
+import { xyoCpp } from "./xyo.ts";
 import type { Runtime } from "./types.ts";
 
 export const RUNTIMES: Runtime[] = [
@@ -19,6 +20,7 @@ export const RUNTIMES: Runtime[] = [
   penguinmod,
   scratchEverywhere,
   oscratchl,
+  xyoCpp,
   gandi,
   penguinmodPort,
   clipcc,
