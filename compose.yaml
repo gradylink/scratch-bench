@@ -11,7 +11,12 @@
 # Common commands:
 #   docker compose exec bench bun run backfill --dry-run
 #   docker compose exec bench bun run bench --runtime turbowarp --runs 3
+#   docker compose exec bench bun run bench --runtime rust-vm --suite performance --runs 3
 #   docker compose down              # keeps the results and the cache (add -v to delete them)
+#
+# rust-vm is built into the image; online setup fetches and builds upstream HEAD.
+# The Docker Git source also tracks HEAD, so upstream changes invalidate its build cache.
+#   docker compose build --pull bench
 
 services:
   bench:

@@ -9,6 +9,7 @@ import { nitrobolt } from "./nitrobolt.ts";
 import { oscratchl } from "./oscratchl.ts";
 import { penguinmod } from "./penguinmod.ts";
 import { penguinmodPort } from "./penguinmod-port.ts";
+import { rustVm } from "./rust-vm.ts";
 import { scratch } from "./scratch.ts";
 import { scratchEverywhere } from "./scratch-everywhere.ts";
 import { snailide } from "./snailide.ts";
@@ -25,6 +26,7 @@ export const RUNTIMES: Runtime[] = [
   scratchEverywhere,
   oscratchl,
   xyoCpp,
+  rustVm,
   gandi,
   penguinmodPort,
   clipcc,

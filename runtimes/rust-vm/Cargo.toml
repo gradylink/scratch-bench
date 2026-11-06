@@ -1,0 +1,13 @@
+[package]
+name = "scratch-bench-rust-vm"
+version = "0.1.0"
+edition = "2024"
+
+# This crate is copied next to the cached upstream src/ checkout before building.
+[workspace]
+
+[dependencies]
+scratch-vm = { path = "../src", features = ["scratch", "cli-frontend", "scratch-addons-debugger"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
