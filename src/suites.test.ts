@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parity } from "./suites.ts";
+import { parity, projects } from "./suites.ts";
 
 test("parity.parse attaches each failure message to its group", () => {
   const d = parity.parse([
@@ -47,4 +47,31 @@ test("parity.parse reads the older format without messages", () => {
     total: 11,
     failures: ["Test 5 Failed", "Test 6 Failed"],
   }]);
+});
+
+test("projects.parse reads each replayed project, cut short or failed", () => {
+  expect(projects.parse([
+    "714869495 | 9179.5 | 1247/1247 | 826.5 | 4 | 1168.6",
+    "1201938491 | 300012.3 | 300/510 | 1221.6 | 0 | 8287.2",
+    "1258519583 | error | Cannot read properties of undefined",
+    "DONE",
+  ])).toEqual({
+    "714869495": {
+      ms: 9179.5,
+      frames: 1247,
+      recorded_frames: 1247,
+      worst_frame_ms: 826.5,
+      short_frames: 4,
+      load_ms: 1168.6,
+    },
+    "1201938491": {
+      ms: 300012.3,
+      frames: 300,
+      recorded_frames: 510,
+      worst_frame_ms: 1221.6,
+      short_frames: 0,
+      load_ms: 8287.2,
+    },
+    "1258519583": { error: "Cannot read properties of undefined" },
+  });
 });

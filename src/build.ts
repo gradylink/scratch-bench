@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUILD_DIR, ROOT } from "./paths.ts";
+import { PROJECT_BUDGET_MS, playlist } from "./projects.ts";
 import { type Suite, suiteSourceDir } from "./suites.ts";
 
 export interface Built {
+  /** The sb3, or for the projects suite the playlist of fetched projects. */
   sb3: string;
   hash: string;
+  /** A run limit that overrides a shorter --timeout. */
+  timeoutMs?: number;
 }
 
 const fractch = async (...args: string[]): Promise<string> => {
@@ -63,6 +67,19 @@ export const buildSuite = async (suite: Suite): Promise<Built> => {
     );
   }
   fs.mkdirSync(BUILD_DIR, { recursive: true });
+  if (suite.id === "projects") {
+    const list = playlist();
+    const file = path.join(BUILD_DIR, "projects.json");
+    fs.writeFileSync(file, JSON.stringify(list));
+    const h = new Bun.CryptoHasher("sha256").update(hashSource(dir));
+    for (const p of list) h.update(p.id);
+    return {
+      sb3: file,
+      hash: h.digest("hex").slice(0, 16),
+      // Each project's budget, plus the minute the runner waits before giving up on a stuck one.
+      timeoutMs: list.length * (PROJECT_BUDGET_MS + 60_000) + 120_000,
+    };
+  }
   const sb3 = path.join(BUILD_DIR, `${suite.id}.sb3`);
   await fractch("check", dir);
   await fractch("to", sb3, "from", dir);

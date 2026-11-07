@@ -32,7 +32,7 @@ export interface SetupOptions {
   gui: boolean;
 }
 
-export type SuiteId = "performance" | "parity";
+export type SuiteId = "performance" | "parity" | "projects";
 
 export interface GitPart {
   git: string;

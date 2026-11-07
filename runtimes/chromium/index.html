@@ -12,58 +12,63 @@ const loadScript = (src) =>
     document.head.appendChild(s);
   });
 
-window.start = async (kind, scripts, compiler = true) => {
-  let vm;
-  {
-    for (
-      const src of scripts ?? [
-        "/node_modules/@scratch/scratch-vm/dist/web/scratch-vm.js",
-        "/node_modules/@scratch/scratch-render/dist/web/scratch-render.js",
-        "/node_modules/@scratch/scratch-svg-renderer/dist/web/scratch-svg-renderer.js",
-        "/node_modules/@scratch/scratch-storage/dist/web/scratch-storage.js",
-        "/audio.js",
-      ]
-    ) await loadScript(src);
-    // ClipCC names its renderer's global differently, and takes a config object whose extension manager its GUI
-    // supplies.
-    if (kind === "clipcc") window.ScratchRender = window.ClipCCRender;
-    vm = kind === "clipcc"
-      ? new VirtualMachine({
-        extensionManager: {
-          emitEvent() {},
-          emitEventToAll() {},
-          getExtensionLoadOrder: (ids) => ids,
-          loadExtensionsWithMode: (ids) =>
-            ids.forEach((id) =>
-              vm.extensionManager.isExtensionLoaded(id) ||
-              vm.extensionManager.loadExtensionIdSync(id)
-            ),
-        },
-      })
-      : new VirtualMachine();
-    // The port's code refers to the editor's global `vm`.
-    if (kind === "penguinmod-port") window.vm = vm;
-    if (kind !== "scratch" && typeof vm.setCompilerOptions === "function") {
-      vm.setCompilerOptions({ enabled: compiler, warpTimer: false });
-    }
-    const audio = new ScratchAudio();
-    vm.attachAudioEngine(audio);
-    await audio.audioContext.resume();
-    const Storage = ScratchStorage.ScratchStorage || ScratchStorage.default ||
-      ScratchStorage;
-    vm.attachStorage(new Storage());
-    vm.attachRenderer(
-      new (ScratchRender.default || ScratchRender)(
-        document.getElementById("c"),
-      ),
-    );
-    const SVG = ScratchSVGRenderer.default || ScratchSVGRenderer;
-    vm.attachV2BitmapAdapter(new SVG.BitmapAdapter());
-    await vm.loadProject(await (await fetch("/project.sb3")).arrayBuffer());
-    vm.setTurboMode(false);
-    vm.start();
-    vm.greenFlag();
+/** Loads the runtime's bundles and makes a VM with storage and a renderer (and audio, if asked). */
+const makeVM = async (kind, scripts, compiler, audio) => {
+  for (
+    const src of scripts ?? [
+      "/node_modules/@scratch/scratch-vm/dist/web/scratch-vm.js",
+      "/node_modules/@scratch/scratch-render/dist/web/scratch-render.js",
+      "/node_modules/@scratch/scratch-svg-renderer/dist/web/scratch-svg-renderer.js",
+      "/node_modules/@scratch/scratch-storage/dist/web/scratch-storage.js",
+      "/audio.js",
+    ]
+  ) await loadScript(src);
+  // ClipCC names its renderer's global differently, and takes a config object whose extension manager its GUI
+  // supplies.
+  if (kind === "clipcc") window.ScratchRender = window.ClipCCRender;
+  const vm = kind === "clipcc"
+    ? new VirtualMachine({
+      extensionManager: {
+        emitEvent() {},
+        emitEventToAll() {},
+        getExtensionLoadOrder: (ids) => ids,
+        loadExtensionsWithMode: (ids) =>
+          ids.forEach((id) =>
+            vm.extensionManager.isExtensionLoaded(id) ||
+            vm.extensionManager.loadExtensionIdSync(id)
+          ),
+      },
+    })
+    : new VirtualMachine();
+  // The port's code refers to the editor's global `vm`.
+  if (kind === "penguinmod-port") window.vm = vm;
+  if (kind !== "scratch" && typeof vm.setCompilerOptions === "function") {
+    vm.setCompilerOptions({ enabled: compiler, warpTimer: false });
   }
+  if (audio) {
+    const engine = new ScratchAudio();
+    vm.attachAudioEngine(engine);
+    await engine.audioContext.resume();
+  }
+  const Storage = ScratchStorage.ScratchStorage || ScratchStorage.default ||
+    ScratchStorage;
+  vm.attachStorage(new Storage());
+  vm.attachRenderer(
+    new (ScratchRender.default || ScratchRender)(
+      document.getElementById("c"),
+    ),
+  );
+  const SVG = ScratchSVGRenderer.default || ScratchSVGRenderer;
+  vm.attachV2BitmapAdapter(new SVG.BitmapAdapter());
+  return vm;
+};
+
+window.start = async (kind, scripts, compiler = true) => {
+  const vm = await makeVM(kind, scripts, compiler, true);
+  await vm.loadProject(await (await fetch("/project.sb3")).arrayBuffer());
+  vm.setTurboMode(false);
+  vm.start();
+  vm.greenFlag();
   let printed = 0;
   let idleSince = null;
   setInterval(() => {
@@ -83,5 +88,137 @@ window.start = async (kind, scripts, compiler = true) => {
       }
     }
   }, 50);
+};
+
+/**
+ * Replays recorded play of one real project frame by frame (the launcher calls this in a fresh
+ * page for each project) and returns `id | ms | frames run/recorded | worst frame ms | frames that
+ * ran fewer ticks than recorded | load ms`.
+ *
+ * Each frame applies that frame's recorded inputs, then steps the VM once, running exactly the
+ * number of scheduler ticks the recording made in that frame (`passes`), so runtimes do the same
+ * work however fast they are. The clock is virtual: it starts at 0 for each project and advances one
+ * frame per step (and a microsecond per read, so warp loops still reach their 500 ms limit).
+ * Math.random is seeded and sound is off, so timers and waits never depend on real time; "play
+ * sound until done" returns at once. A project stops after `budgetMs` of real time.
+ */
+window.replay = async (kind, scripts, compiler, id, budgetMs) => {
+  const vm = await makeVM(kind, scripts, compiler, false);
+  const realNow = performance.now.bind(performance);
+  const realDate = Date.now;
+  const realRandom = Math.random;
+  const canvas = document.getElementById("c");
+  try {
+    const rec = await (await fetch(`/recordings/${id}.json`)).json();
+    const sb3 = await (await fetch(`/projects/${id}.sb3`)).arrayBuffer();
+    // TurboWarp-based VMs apply the project's settings comment (frame rate, stage size, ...) here.
+    const loadStart = realNow();
+    await vm.loadProject(sb3);
+    // Vector costumes finish decoding in an image load event, which the replay loop below would
+    // never let run, so wait for them. An empty one (zero size) never reports loaded.
+    const pending = () =>
+      (vm.renderer._allSkins ?? []).filter((skin) =>
+        skin?._svgImageLoaded === false && skin._size?.[0] && skin._size?.[1]
+      ).length;
+    while (pending()) {
+      if (realNow() - loadStart > 60000) throw new Error(`${pending()} vector costumes didn't load`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const loadMs = realNow() - loadStart;
+    const frameMs = 1000 / (rec.framerate || 60);
+    vm.runtime.currentStepTime = frameMs;
+
+    const byFrame = new Map();
+    for (const input of rec.inputs) {
+      if (!byFrame.has(input.frame)) byFrame.set(input.frame, []);
+      byFrame.get(input.frame).push(input);
+    }
+    const width = vm.runtime.stageWidth || 480;
+    const height = vm.runtime.stageHeight || 360;
+    const apply = (input) => {
+      if (input.type === "greenFlag") vm.greenFlag();
+      else if (input.type === "key") {
+        vm.postIOData("keyboard", { key: input.key, keyCode: input.keyCode, isDown: input.down });
+      } else if (input.type === "mouse") {
+        // Recorded in stage units; Scratch takes canvas pixels and clamps to the stage.
+        vm.postIOData("mouse", {
+          x: (input.x / width + 0.5) * canvas.clientWidth,
+          y: (0.5 - input.y / height) * canvas.clientHeight,
+          canvasWidth: canvas.clientWidth,
+          canvasHeight: canvas.clientHeight,
+          ...(input.down === undefined ? {} : { isDown: input.down, button: input.button ?? 0 }),
+        });
+      } else if (input.type === "wheel") {
+        vm.postIOData("mouseWheel", { deltaX: input.dx, deltaY: input.dy });
+      } else if (input.type === "answer") vm.runtime.emit("ANSWER", input.text);
+      else if (input.type === "turbo") vm.setTurboMode(input.on);
+      else if (input.type === "variable") {
+        const target = input.target
+          ? vm.runtime.getSpriteTargetByName(input.target)
+          : vm.runtime.getTargetForStage();
+        const variable = target?.lookupVariableById(input.id);
+        if (variable) variable.value = input.value;
+      }
+    };
+
+    let virtual = 0;
+    let seed = Number(id) >>> 0;
+    let total = 0;
+    let worst = 0;
+    let diverged = 0;
+    let frame = 0;
+    try {
+      // Both clocks advance a microsecond per read, since Scratch's timers read Date.now.
+      performance.now = () => (virtual += 0.001);
+      Date.now = () => 1700000000000 + Math.floor(performance.now());
+      Math.random = () => {
+        seed = (seed + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      vm.runtime.updateCurrentMSecs?.();
+      vm.runtime.ioDevices.clock.resetProjectTimer();
+
+      // Exactly `passes[frame]` ticks per step: the tick loop runs while this timer reads 0. A
+      // tick only counts if it will run, since a redraw also ends the loop. The loop also stops
+      // when the real-time budget runs out mid-frame.
+      let allowed = 0;
+      let ticks = 0;
+      let frameStart = 0;
+      vm.runtime.sequencer.timer = {
+        start() {
+          ticks = 0;
+        },
+        timeElapsed() {
+          const run = ticks < allowed && total + realNow() - frameStart < budgetMs &&
+            (vm.runtime.turboMode || !vm.runtime.redrawRequested);
+          if (run) ticks++;
+          return run ? 0 : Infinity;
+        },
+      };
+      for (; frame < rec.frames && total < budgetMs; frame++) {
+        for (const input of byFrame.get(frame) ?? []) apply(input);
+        allowed = rec.passes[frame] ?? 1;
+        frameStart = realNow();
+        vm.runtime._step();
+        const ms = realNow() - frameStart;
+        total += ms;
+        worst = Math.max(worst, ms);
+        // Fewer ticks than recorded means the replay drifted, unless the budget cut the frame short.
+        if (ticks < allowed && total < budgetMs) diverged++;
+        virtual = Math.max(virtual, (frame + 1) * frameMs);
+      }
+    } finally {
+      performance.now = realNow;
+      Date.now = realDate;
+      Math.random = realRandom;
+      vm.stopAll();
+    }
+    const r = (n) => Math.round(n * 1000) / 1000;
+    return `${id} | ${r(total)} | ${frame}/${rec.frames} | ${r(worst)} | ${diverged} | ${r(loadMs)}`;
+  } catch (e) {
+    return `${id} | error | ${String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 200)}`;
+  }
 };
 </script>

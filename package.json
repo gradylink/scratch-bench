@@ -11,6 +11,7 @@
     "site:demo": "cd site && bun run demo",
     "site:test": "cd site && bun run test",
     "backfill": "bun src/backfill/cli.ts",
+    "fetch-projects": "bun src/fetch-projects.ts",
     "test": "bun test src"
   },
   "dependencies": {

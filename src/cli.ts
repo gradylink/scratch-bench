@@ -24,9 +24,11 @@ const USAGE = `usage: bun run bench [setup] [options]
 
   setup                   only build the suites and set up the runtimes
   --runtime a,b           runtimes to test (default: all)
-  --suite a,b             suites to run: performance, parity (default: all)
+  --suite a,b             suites to run: performance, parity, projects (default: performance, parity)
+                          projects replays recorded play of real projects; run \`bun run fetch-projects\` first
   --runs N                runs per runtime for the performance suite (default 10)
   --parity-runs N         runs per runtime for the parity suite (default 1)
+  --project-runs N        runs per runtime for the projects suite (default 1)
   --timeout S             seconds before a run is killed (default 300)
   --display x11|wayland   virtual display backend for rendered native runs (default x11)
   --no-variants           run each runtime in its default VM mode only (not compiler and interpreter, bytecode and not)
@@ -42,6 +44,7 @@ const { values: opts, positionals } = parseArgs({
     suite: { type: "string" },
     runs: { type: "string" },
     "parity-runs": { type: "string" },
+    "project-runs": { type: "string" },
     timeout: { type: "string", default: "300" },
     display: { type: "string", default: "x11" },
     offline: { type: "boolean", default: false },
@@ -223,10 +226,17 @@ const runSuite = async (
     log(`${suite.id} / ${label}: skipped, ${skipped}`);
     return { ...base, skipped };
   }
+  if (suite.supports && !suite.supports(launcher.command(built.sb3, variant))) {
+    const skipped = "this runtime's launcher can't run this suite yet";
+    log(`${suite.id} / ${label}: skipped, ${skipped}`);
+    return { ...base, skipped };
+  }
   base.runtime.launcher = kind;
 
   const total = suite.id === "parity"
     ? count(opts["parity-runs"], suite.runs)
+    : suite.id === "projects"
+    ? count(opts["project-runs"], suite.runs)
     : count(opts.runs, suite.runs);
   log(
     `${suite.id} / ${label} (${kind}): ${total} run${total > 1 ? "s" : ""}`,
@@ -234,7 +244,7 @@ const runSuite = async (
   const measured = await measureSuite(suite, launcher, built.sb3, {
     variant,
     runs: total,
-    timeoutMs,
+    timeoutMs: Math.max(timeoutMs, built.timeoutMs ?? 0),
     displayKind: opts.display as DisplayKind,
     log,
   });

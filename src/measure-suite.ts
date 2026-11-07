@@ -4,7 +4,7 @@ import type { SuiteResult } from "./report.ts";
 import type { Command, Launcher, Variant } from "./runtimes/types.ts";
 import { withVariant } from "./variants.ts";
 import { summarize } from "./stats.ts";
-import type { Suite } from "./suites.ts";
+import type { ProjectRun, Suite } from "./suites.ts";
 
 export interface MeasureOptions {
   runs: number;
@@ -62,7 +62,8 @@ export const measureSuite = async (
     } finally {
       await display?.stop();
     }
-    const data = run.ok ? suite.parse(run.lines) : undefined;
+    // A projects run that died part-way still reports the projects it finished.
+    const data = run.ok || suite.id === "projects" ? suite.parse(run.lines) : undefined;
     if (data !== undefined) datas.push(data);
     runs.push({
       ok: run.ok,
@@ -111,6 +112,26 @@ export const measureSuite = async (
         },
       ]),
     );
+  } else if (suite.id === "projects") {
+    // Per project: the median time over runs; frame counts and errors from the last run.
+    const perRun = datas as Record<string, ProjectRun>[];
+    const ids = [...new Set(perRun.flatMap((d) => Object.keys(d)))];
+    results = Object.fromEntries(ids.map((id) => {
+      const ran = perRun.map((d) => d[id]).filter((r) => r && !("error" in r)) as Extract<
+        ProjectRun,
+        { ms: number }
+      >[];
+      const last = perRun.map((d) => d[id]).filter(Boolean).at(-1)!;
+      if (!ran.length) return [id, last];
+      return [id, {
+        ms: summarize(ran.map((r) => r.ms)),
+        worst_frame_ms: summarize(ran.map((r) => r.worst_frame_ms)),
+        load_ms: summarize(ran.map((r) => r.load_ms)),
+        frames: ran.at(-1)!.frames,
+        recorded_frames: ran.at(-1)!.recorded_frames,
+        short_frames: ran.at(-1)!.short_frames,
+      }];
+    }));
   } else if (datas.length) {
     results = datas[datas.length - 1];
   }

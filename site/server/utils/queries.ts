@@ -79,7 +79,9 @@ const rsdOf = (
 
 export const buildMeta = (ds: Dataset, separate = false): Meta => {
   const latestByRuntime = new Map<string, Entry>();
-  for (const e of viewOf(ds, separate)) latestByRuntime.set(e.runtime.id, e);
+  for (const e of viewOf(ds, separate)) {
+    if (e.suite === "performance" || e.suite === "parity") latestByRuntime.set(e.runtime.id, e);
+  }
   const runtimes: RuntimeInfo[] = [...latestByRuntime.values()].map((e) => ({
     id: e.runtime.id,
     base: e.runtime.base,

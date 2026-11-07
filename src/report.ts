@@ -157,6 +157,50 @@ export const renderReport = (results: SuiteResult[]): string => {
   );
   out.push("");
 
+  const projects = results.filter((r) => r.suite.id === "projects" && !r.skipped);
+  if (projects.length) {
+    type Replayed = {
+      ms?: Summary;
+      frames?: number;
+      recorded_frames?: number;
+      short_frames?: number;
+      error?: string;
+    };
+    const resultsOf = (r: SuiteResult) => (r.results as Record<string, Replayed>) ?? {};
+    const ids = [...new Set(projects.flatMap((r) => Object.keys(resultsOf(r))))];
+    out.push(
+      "Projects: median ms to replay each recording (cut short: frames reached; ~: drifted from the recording)\n",
+    );
+    out.push(
+      table(
+        ["project", ...projects.map((r) => labelOf(r.runtime.name, r.runtime.variant))],
+        ids.map((id) => [
+          id,
+          ...projects.map((r) => {
+            const p = resultsOf(r)[id];
+            if (!p) return "-";
+            if (p.error) return "error";
+            const shown = p.frames! < p.recorded_frames!
+              ? `${p.frames}/${p.recorded_frames} frames`
+              : num(p.ms!.median);
+            return p.short_frames ? `~${shown}` : shown;
+          }),
+        ]),
+      ),
+    );
+    out.push("");
+    for (const r of projects) {
+      const all = Object.values(resultsOf(r));
+      const done = all.filter((p) => !p.error && p.frames === p.recorded_frames);
+      out.push(
+        `${labelOf(r.runtime.name, r.runtime.variant)}: ${done.length}/${all.length} replayed in full, ${
+          num(done.reduce((n, p) => n + p.ms!.median, 0))
+        } ms in total, ${all.filter((p) => p.error).length} errors`,
+      );
+    }
+    out.push("");
+  }
+
   const parity = results.filter((r) => r.suite.id === "parity");
   if (parity.length) {
     out.push("Parity\n");
