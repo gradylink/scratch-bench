@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build pkg-config \
     libcurl4-openssl-dev libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
     libgl1-mesa-dev libasound2-dev libsdl2-dev librsvg2-2 \
+    llvm-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=osl /usr/local/go /usr/local/go
