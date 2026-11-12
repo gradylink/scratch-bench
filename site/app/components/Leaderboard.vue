@@ -12,20 +12,20 @@ const replaying = ref(false);
 const replaySeries = computed(() =>
   Object.entries(scores.value?.runtimes ?? {})
     .filter(([id]) => shown(id))
-    .map(([id, s]) => ({ id, name: nameOf(id), values: s.total }))
+    .map(([id, s]) => ({ id, name: nameOf(id), values: totalsOfCurrentKind(scores.value, s.total) }))
 );
 
 const rows = computed(() => {
   const s = scores.value;
   if (!s) return [];
   const mapped = Object.entries(s.runtimes).map(([id, series]) => {
-    const total = lastValue(series.total);
+    const total = lastTotal(s, series.total);
     const rt = latest.value?.runtimes.find((r) => r.id === id);
     return {
       id,
       name: nameOf(id),
       total,
-      change: change(total, previousValue(series.total)),
+      change: change(total, previousTotal(s, series.total)),
       coverage: lastValue(series.coverage),
       version: rt?.version ?? "",
       timestamp: rt?.timestamp ?? null,

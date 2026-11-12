@@ -3,7 +3,7 @@ import path from "node:path";
 import { ADAPTERS, ROOT, RUNTIME_DIR } from "../paths.ts";
 import { COMPILER_VARIANTS } from "../variants.ts";
 import { buildDirPart, ensureWebBundle, run } from "../webbundle.ts";
-import { forkStack } from "./node-vm.ts";
+import { forkStack, replayEnv } from "./node-vm.ts";
 import type { Command, Runtime } from "./types.ts";
 
 const REPO = "https://codeberg.org/ampmod/ampmod.git";
@@ -119,5 +119,11 @@ export const ampmod: Runtime = {
     };
   },
   headless: { command: command("node-vm.mjs") },
-  gui: { command: command("chromium-vm.mjs") },
+  gui: {
+    command: command("chromium-vm.mjs"),
+    replay: (sb3, r) => {
+      const c = command("chromium-vm.mjs")(sb3);
+      return { ...c, env: { ...c.env, ...replayEnv(r) } };
+    },
+  },
 };

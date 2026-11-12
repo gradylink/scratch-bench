@@ -1,6 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <div id="player"></div>
+<script src="/__replay.js"></script>
 <!-- Served from the root of a forkphorus checkout, so the player finds its fonts and sounds where it expects them. -->
 <script>
 const loadScript = (src) =>
@@ -54,5 +55,168 @@ window.start = async (scripts) => {
       }
     }
   }, 50);
+};
+// ---- replaying a recording (projects/REPLAY.md), like runtimes/chromium/index.html `replay` ----
+// The runner patches the frame loop in phosphorus.dist.js as it serves it, so each frame makes the
+// number of passes window.__benchFrame asks for. Input goes through the same DOM events the player
+// listens for. forkphorus's warp mode never stops for time already.
+
+/** The project's state, hashed as every runner does (BenchReplay.stateHash). */
+const ROTATION = ["all around", "left-right", "don't rotate"];
+const forkphorusState = (stage) =>
+  BenchReplay.stateHash([stage, ...stage.children].map((t) => ({
+    stage: t === stage,
+    original: !t.isClone,
+    name: t === stage ? "Stage" : t.name,
+    x: t.scratchX, y: t.scratchY, direction: t.direction, size: t.scale * 100,
+    costume: t.currentCostumeIndex,
+    visible: t.visible,
+    rotationStyle: typeof t.rotationStyle === "number" ? ROTATION[t.rotationStyle] : t.rotationStyle,
+    draggable: !!t.isDraggable,
+    layer: stage.children.indexOf(t),
+    effects: t.filters,
+    // forkphorus keeps variables by name, so it can't have two of one name.
+    variables: Object.entries(t.vars ?? {}),
+    // A list a block names that the project doesn't have ends up under "undefined", empty; scratch-vm
+    // makes no such list.
+    lists: Object.entries(t.lists ?? {}).filter(([name]) => name !== "undefined"),
+  })));
+
+window.replay = async (scripts, id, budgetMs, withDrawing = false) => {
+  const det = BenchReplay;
+  det.install();
+  const bench = window.__benchFrame = { passes: 0, target: 1 };
+  // Sound is off: without an audio context forkphorus doesn't play sounds or wait for them, which
+  // it otherwise does in real time. It makes its context once, as it loads.
+  delete window.AudioContext;
+  delete window.webkitAudioContext;
+  for (const src of scripts) await loadScript(src);
+  const player = new P.player.Player();
+  // The green flag comes from the recording, so the player mustn't press it when the project loads.
+  player.setOptions({ turbo: false, focusOnLoad: false, autoplayPolicy: "never" });
+  document.getElementById("player").appendChild(player.root);
+  // Nobody watches a replay: hidden, the stage still draws and keeps its layout (for the pointer's
+  // position), but the page isn't composited after every frame, which costs more than the frame.
+  document.getElementById("player").style.visibility = "hidden";
+  const recording = await (await fetch("/__recording.json")).json();
+  const project = await (await fetch("/__bench.sb3")).arrayBuffer();
+  await new Promise((resolve, reject) => {
+    player.onload.subscribe(resolve);
+    player.onerror.subscribe((e) => reject(new Error("load failed: " + (e && (e.message || e)))));
+    player.loadProjectFromBuffer(project, "sb3").catch(reject);
+  });
+  const stage = player.getStage();
+  const runtime = stage.runtime;
+  // The player starts the runtime's own frame timer once the project loads; the replay steps frames
+  // itself, so stop that. The input handlers only act while the runtime counts as running.
+  runtime.pause();
+  runtime.isRunning = true;
+  // The clock moves at the recording's frame rate, as in the scratch-vm runner.
+  const interval = 1000 / (recording.framerate || 30);
+  let drawMs = 0;
+  const draw = stage.draw;
+  // The stage isn't drawn unless asked for, as in the scratch-vm runner.
+  stage.draw = !withDrawing ? () => {} : function () {
+    const t = performance.now();
+    draw.call(this);
+    drawMs += performance.now() - t;
+  };
+
+  // Read once: reading it per input could force a layout inside the frame's time.
+  const rect = stage.canvas.getBoundingClientRect();
+  const at = (x, y) => {
+    return { clientX: rect.left + (x + 240) * stage.zoom, clientY: rect.top + (180 - y) * stage.zoom };
+  };
+  const onStage = (x, y) => Math.abs(x) < 240 && Math.abs(y) < 180;
+  const apply = (input) => {
+    switch (input.type) {
+      // As in Scratch, the green flag stops everything first.
+      case "greenFlag":
+        runtime.stopAll();
+        return runtime.triggerGreenFlag();
+      case "stop": return runtime.stopAll();
+      // Frames make the recorded passes whatever the turbo setting (forkphorus.mjs).
+      case "turbo": return;
+      case "key":
+        return stage.canvas.dispatchEvent(new KeyboardEvent(input.down ? "keydown" : "keyup", {
+          key: input.key, bubbles: true, cancelable: true,
+        }));
+      case "wheel":
+        return stage.root.dispatchEvent(new WheelEvent("wheel", { deltaX: input.dx, deltaY: input.dy, bubbles: true }));
+      case "answer":
+        stage.prompt.value = input.text;
+        return stage.submitPrompt();
+      case "variable": {
+        const target = input.target === null
+          ? stage
+          : stage.children.find((c) => !c.isClone && c.name === input.target);
+        const name = target?.varIds?.[input.id];
+        if (name !== undefined) target.vars[name] = input.value;
+        return;
+      }
+      case "mouse": {
+        const type = !("down" in input) ? "mousemove" : input.down ? "mousedown" : "mouseup";
+        const target = onStage(input.x, input.y) ? stage.canvas : document.body;
+        return target.dispatchEvent(new MouseEvent(type, {
+          ...at(input.x, input.y), button: input.button ?? 0, bubbles: true, cancelable: true,
+        }));
+      }
+    }
+  };
+
+  // Waits for the GPU to finish what the frame queued, as in the scratch-vm runner (the 2D-canvas
+  // renderer, a fallback, has nothing to wait for).
+  const gl = stage.renderer.gl;
+  const pixel = new Uint8Array(4);
+  const finishGpu = () => gl && gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+  // At each checkpoint, the script time so far and the project's state.
+  const checkpoints = {};
+  const states = {};
+  let frame = 0;
+  let next = 0;
+  // Frame time is everything from the start of the replay's frames, without hashing, and what the
+  // budget counts; the checkpoints count script time, as in the scratch-vm runner.
+  let frameMs = 0;
+  let checkMs = 0;
+  let scriptMs = 0;
+  let drifted = 0;
+  det.seed(1);
+  console.log("[REPLAY] frames start");
+  const start = performance.now();
+  // The budget is real time from the first frame, hashing and all, so that a frame the runner
+  // finds still going LATE_MS after it (replay-runner.mjs) has been going at least that long.
+  while (frame < recording.frames && performance.now() - start < budgetMs) {
+    // Where a frame begins, so a cut replay is bounded from the frame it was cut in.
+    det.started({ frame, scriptMs, drawMs, drifted });
+    // Script time is the runtime's own work for the frame (handling its inputs, stepping it).
+    const t = performance.now();
+    const before = drawMs;
+    det.setTime(det.EPOCH + frame * interval);
+    while (next < recording.inputs.length && recording.inputs[next].frame <= frame) {
+      apply(recording.inputs[next++]);
+    }
+    bench.passes = 0;
+    bench.target = recording.passes[frame] ?? 1;
+    runtime._step();
+    const stepped = performance.now();
+    scriptMs += stepped - t - (drawMs - before);
+    finishGpu();
+    drawMs += performance.now() - stepped;
+    if (bench.passes !== bench.target) drifted++;
+    frame++;
+    await det.yieldToEventLoop();
+    frameMs = performance.now() - start - checkMs;
+    if (det.CHECKPOINTS.includes(frame)) {
+      const c = performance.now();
+      checkpoints[frame] = scriptMs;
+      states[frame] = forkphorusState(stage);
+      checkMs += performance.now() - c;
+      det.report({ frame, frameMs, scriptMs, drawMs, drifted, state: states[frame] });
+    }
+  }
+  console.log("[REPLAY] frames end");
+  checkpoints[frame] = scriptMs;
+  states[frame] ??= forkphorusState(stage);
+  return det.line(id, { scriptMs, drawMs, frameMs, frames: frame, recorded: recording.frames, drifted, states, checkpoints });
 };
 </script>

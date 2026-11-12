@@ -246,3 +246,70 @@ describe("queries", () => {
     expect(s.suiteHashes.filter(Boolean).length).toBeGreaterThan(0);
   });
 });
+
+describe("buildScores with real projects", () => {
+  const replay = (frames: number, ms: number, extra = {}) => ({
+    frames, recorded_frames: 300, drifted: 0, hash: "0badf00d", hash_kind: "scratch-vm",
+    checkpoints: { 30: ms / 10, [frames]: ms }, frame_ms: { median: ms }, ...extra,
+  });
+  // Adds a projects result for a runtime to a run, made like that run's performance result.
+  const addProjects = (run: string, runtime: string, results: Record<string, unknown>) => {
+    const perf = JSON.parse(fs.readFileSync(path.join(dir, run, `performance-${runtime}.json`), "utf8"));
+    fs.writeFileSync(
+      path.join(dir, run, `projects-${runtime}.json`),
+      JSON.stringify({ ...perf, suite: { id: "projects", source_hash: "demo-projects" }, runs: [], stats: {}, results }),
+    );
+  };
+  const runs = () =>
+    fs.readdirSync(dir).filter((d) => fs.existsSync(path.join(dir, d, "performance-turbowarp.json"))).sort();
+  const lastTotal = (s: ReturnType<typeof buildScores>, id: string) => s.runtimes[id].total.at(-1);
+
+  it("scores projects only in runs where TurboWarp's replays can be compared", () => {
+    const run = runs().at(-1)!;
+    const host = loadDataset(dir).entries.find((e) => e.runId === run)!.hostId;
+    const before = buildScores(loadDataset(dir), { host });
+    const added: string[] = [];
+    try {
+      // An old-format run (no checkpoints): the totals stay the benchmarks'.
+      addProjects(run, "turbowarp", { a: { ms: { median: 900 }, frames: 300 } });
+      added.push("turbowarp");
+      const old = buildScores(loadDataset(dir), { host });
+      expect(lastTotal(old, "turbowarp")).toBe(lastTotal(before, "turbowarp"));
+      expect(lastTotal(old, "scratch")).toBe(lastTotal(before, "scratch"));
+      expect(old.runtimes.turbowarp.projects.at(-1)).toBeNull();
+      expect(old.projectRuns.at(-1)).toBe(false);
+
+      // TurboWarp replayed both projects; Scratch was half as fast on a and cut off on b.
+      addProjects(run, "turbowarp", { a: replay(300, 500), b: replay(300, 1000) });
+      addProjects(run, "scratch", { a: replay(300, 1000), b: replay(120, 2000) });
+      added.push("scratch");
+      const s = buildScores(loadDataset(dir), { host });
+      const tw = s.runtimes.turbowarp.projects.at(-1)!;
+      const sc = s.runtimes.scratch.projects.at(-1)!;
+      // TurboWarp: 300 frames in 500 ms and in 1000 ms.
+      expect(tw).toBeCloseTo(Math.sqrt((300 / 500) * (300 / 1000)), 2);
+      // Scratch on a: half TurboWarp's speed. On b, compared at frame 30: 100 ms against 200 ms.
+      expect(sc).toBeCloseTo(Math.sqrt(0.5 * (300 / 500) * 0.5 * (300 / 1000)), 2);
+      // Only this run scored projects, so only its totals are of that kind.
+      expect(s.projectRuns.at(-1)).toBe(true);
+      expect(s.projectRuns.filter(Boolean).length).toBe(1);
+
+      // Scratch failing the heavier project leaves its score at its speed on the other, rather
+      // than moving it by how heavy the project it failed was.
+      addProjects(run, "scratch", { a: replay(300, 1000), b: { error: "crashed" } });
+      const failed = buildScores(loadDataset(dir), { host });
+      expect(failed.runtimes.scratch.projects.at(-1)).toBeCloseTo(sc, 2);
+      expect(lastTotal(s, "turbowarp")).not.toBe(lastTotal(before, "turbowarp"));
+      // Runtimes in the run without replays can't be compared with those with them: no total.
+      const others = Object.keys(s.runtimes).filter((id) =>
+        id !== "turbowarp" && id !== "scratch" && fs.existsSync(path.join(dir, run, `performance-${id}.json`))
+      );
+      expect(others.length).toBeGreaterThan(0);
+      for (const id of others) expect(lastTotal(s, id)).toBeNull();
+      // Earlier runs are untouched.
+      expect(s.runtimes.scratch.total.at(-2)).toBe(before.runtimes.scratch.total.at(-2));
+    } finally {
+      for (const id of added) fs.rmSync(path.join(dir, run, `projects-${id}.json`));
+    }
+  });
+});

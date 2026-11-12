@@ -1624,6 +1624,9 @@ summary {
 @media (max-width: 64rem) {
   .page__layout {
     flex-direction: column-reverse;
+    /* As a column, the content takes the screen's width, so a wide table scrolls inside its panel
+       rather than widening the page. */
+    align-items: stretch;
   }
 
   .sidebar {

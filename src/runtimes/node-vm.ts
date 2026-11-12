@@ -1,7 +1,7 @@
 import path from "node:path";
 import { ADAPTERS, ROOT } from "../paths.ts";
 import { ensureWebBundle, type WebPart, type WebRecipe } from "../webbundle.ts";
-import type { HistorySpec, Runtime, Variant } from "./types.ts";
+import type { HistorySpec, Replay, Runtime, Variant } from "./types.ts";
 
 export type NodeVmId =
   | "scratch"
@@ -63,6 +63,13 @@ const trackLatest = async (id: NodeVmId): Promise<void> => {
   }
 };
 
+/** How the browser runners (chromium-vm.mjs, forkphorus.mjs) are told to replay. */
+export const replayEnv = (r: Replay): Record<string, string> => ({
+  BENCH_RECORDING: r.recording,
+  BENCH_REPLAY_ID: r.id,
+  BENCH_REPLAY_BUDGET_MS: String(r.budgetMs),
+});
+
 export const nodeVmRuntime = (
   id: NodeVmId,
   name: string,
@@ -97,6 +104,11 @@ export const nodeVmRuntime = (
         command: (sb3) => ({
           cmd: ["node", path.join(ADAPTERS, "chromium-vm.mjs"), id, sb3],
           cwd: ROOT,
+        }),
+        replay: (sb3, r) => ({
+          cmd: ["node", path.join(ADAPTERS, "chromium-vm.mjs"), id, sb3],
+          cwd: ROOT,
+          env: { ...(process.env as Record<string, string>), ...replayEnv(r) },
         }),
       }
       : undefined,

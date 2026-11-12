@@ -21,22 +21,36 @@ export interface ParityData {
   }[];
 }
 
-/** One recorded project replayed (see src/bake.ts). */
+/** One recorded project replayed (see runtimes/chromium/index.html `replay`). */
 export type ProjectRun =
   | {
-    /** Real time the replay took. */
-    ms: number;
-    /** Real time the recording took; a runtime that keeps up takes about this long. */
-    recorded_ms: number;
-    /** Scheduler ticks replayed, of the recording's; fewer when it ran out of time. */
-    ticks: number;
-    recorded_ticks: number;
-    /** The longest gap between two ticks: the worst frame. */
-    worst_ms: number;
-    /** Gaps between ticks longer than 50 ms: frames that couldn't keep up. */
-    long_frames: number;
-    /** From starting the runtime to the replay starting. */
-    load_ms?: number;
+    /**
+     * Frame time: all of the frames, back to back, without hashing (the runtime's work, the GPU
+     * finishing, what the browser does for it between frames). What the replay is measured by.
+     */
+    frame_ms: number;
+    /** Of that, the runtime's own work: handling the inputs and stepping the frames. */
+    script_ms: number;
+    /** Of that, drawing and waiting for the GPU to finish each frame. */
+    draw_ms: number;
+    /** Frames replayed, of the recording's; fewer when it ran out of time. */
+    frames: number;
+    recorded_frames: number;
+    /** Frames that made a different number of passes than recorded. */
+    drifted: number;
+    /**
+     * The project's state at the last frame (projects/REPLAY.md, "State"): a runtime that computes
+     * something else differs. "unfinished" when the replay was cut in a frame that didn't end.
+     */
+    hash: string;
+    /**
+     * Script time so far at set frames (1, 2, 3, 5, 8, ... and the last), to compare runtimes on
+     * exactly the frames both got through. A cut replay adds the frame it was cut in, past the
+     * frames it reached, as a bound (projects/REPLAY.md).
+     */
+    checkpoints: Record<number, number>;
+    /** The project's state at each checkpoint (not the bound), to check it against another's. */
+    states: Record<number, string>;
   }
   | { error: string };
 
@@ -47,8 +61,6 @@ export interface Suite<T = unknown> {
   runs: number;
   isDone(line: string): boolean;
   parse(lines: string[]): T;
-  /** Run with the other launcher when a runtime doesn't have this one. */
-  anyLauncher?: boolean;
   /** Run each runtime in its default mode only, not every variant. */
   defaultVariantOnly?: boolean;
 }
@@ -118,31 +130,47 @@ export const parity: Suite<ParityData> = {
   },
 };
 
-const PROJECT_LINE = /^(\d+) \| ([\d.]+) \| (\d+)\/(\d+) \| ([\d.]+) \| (\d+) \| (\d+)$/;
+const PROJECT_LINE =
+  /^(\d+) \| ([\d.]+) \| ([\d.]+) \| ([\d.]+) \| (\d+)\/(\d+) \| (\d+) \| (\S+) \| ([\da-z.:,]*)$/;
 
-/** Real projects replaying recorded play, baked into each project (src/bake.ts). One sb3 per run. */
+/**
+ * Real projects, each replaying a recording of someone using it, frame by frame and the same in
+ * every runtime, the way TurboWarp's pianola benchmark does. One project per run of the runtime.
+ */
 export const projects: Suite<Record<string, ProjectRun>> = {
   id: "projects",
   source: "projects",
   launcher: "gui",
-  anyLauncher: true,
-  // Each project plays in real time, so every variant would add minutes to the nightly run.
+  // Only runtimes whose launcher can replay (projects/REPLAY.md) run it. Each project runs 3 times
+  // and is reported by the medians: one run varies by up to about 8%.
   defaultVariantOnly: true,
-  runs: 1,
+  runs: 3,
   isDone: (line) => line === "DONE",
   parse(lines) {
     const out: Record<string, ProjectRun> = {};
     for (const line of lines) {
       const m = PROJECT_LINE.exec(line);
-      if (!m) continue;
-      out[m[1]] = {
-        ms: Number(m[2]),
-        ticks: Number(m[3]),
-        recorded_ticks: Number(m[4]),
-        worst_ms: Number(m[5]),
-        long_frames: Number(m[6]),
-        recorded_ms: Number(m[7]),
-      };
+      if (m) {
+        out[m[1]] = {
+          script_ms: Number(m[2]),
+          draw_ms: Number(m[3]),
+          frame_ms: Number(m[4]),
+          frames: Number(m[5]),
+          recorded_frames: Number(m[6]),
+          drifted: Number(m[7]),
+          hash: m[8],
+          // frame:ms:state, or frame:ms for a bound.
+          checkpoints: Object.fromEntries(
+            m[9].split(",").filter(Boolean).map((c) => c.split(":")).map(([f, ms]) => [Number(f), Number(ms)]),
+          ),
+          states: Object.fromEntries(
+            m[9].split(",").filter(Boolean).map((c) => c.split(":")).filter((c) => c[2]).map(([f, , s]) => [Number(f), s]),
+          ),
+        };
+        continue;
+      }
+      const e = /^(\d+) \| error \| (.*)$/.exec(line);
+      if (e) out[e[1]] = { error: e[2] };
     }
     return out;
   },

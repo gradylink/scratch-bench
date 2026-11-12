@@ -80,16 +80,43 @@ export interface LatestRuntime {
   parity: (ParitySummary & { timestamp: string; stale: boolean }) | null;
 }
 
+/** One recorded project replayed in one runtime (projects/REPLAY.md). */
 export interface ProjectResult {
   /** Set when the replay failed; the rest is then empty. */
   error: string | null;
-  ms: Summary | null;
-  recorded_ms: number | null;
-  ticks: number | null;
-  recorded_ticks: number | null;
-  worst_ms: Summary | null;
-  long_frames: number | null;
-  load_ms: Summary | null;
+  /** The project's title (results from before titles were recorded have none). */
+  title: string | null;
+  /** Real time for the frames, back to back, without hashing: what the replay's budget counts. */
+  frame_ms: Summary | null;
+  /** Of that, stepping the frames (handling inputs and running scripts): the runtime's speed. */
+  script_ms: Summary | null;
+  /** Of that, drawing the stage and waiting for the GPU. */
+  draw_ms: Summary | null;
+  /** Older results' real time. */
+  wall_ms: Summary | null;
+  /** Frames replayed, of the recording's; fewer when it ran out of time. */
+  frames: number | null;
+  recorded_frames: number | null;
+  /** Frames that made a different number of passes than recorded: different work. */
+  drifted: number | null;
+  /**
+   * The project's state through the replay, as 8 hex digits; a runtime computing something else
+   * differs. "mixed" when its runs disagreed, "unfinished" when a frame never ended; null when its
+   * runs stopped at different frames.
+   */
+  hash: string | null;
+  /** How the hash was made: "state" (projects/REPLAY.md) in every runner; older results differ. */
+  hash_kind: string | null;
+  /** The project's state at each checkpoint, to check against TurboWarp's (newer results). */
+  states?: Record<string, string> | null;
+  /** Script time so far at set frames (1, 2, 3, 5, 8, ... and the last reached). */
+  checkpoints: Record<string, number> | null;
+  /** Older results, from replays in real time. */
+  ms?: Summary | null;
+  recorded_ms?: number | null;
+  ticks?: number | null;
+  recorded_ticks?: number | null;
+  long_frames?: number | null;
 }
 
 export interface LatestProjects {
@@ -137,6 +164,8 @@ export interface History {
 export interface ScoreSeries {
   total: (number | null)[];
   categories: Record<string, (number | null)[]>;
+  /** The real-projects score (frames per ms of script time), where a run has projects. */
+  projects: (number | null)[];
   coverage: (number | null)[];
 }
 
@@ -145,6 +174,11 @@ export interface ScoreHistory {
   weights: "default" | "equal";
   scoreVersion: number;
   timestamps: string[];
+  /**
+   * Whether each run scored real projects. Its totals then count them, so they aren't on the same
+   * scale as a run's that didn't: compare totals only between runs alike (see lastTotal).
+   */
+  projectRuns: boolean[];
   suiteHashes: (string | null)[];
   runtimes: Record<string, ScoreSeries>;
 }

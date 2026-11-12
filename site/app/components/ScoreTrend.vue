@@ -21,7 +21,9 @@ const option = computed(() => {
     if (hash) prevHash = hash;
   });
   const series = Object.entries(s?.runtimes ?? {}).filter(([id]) => shown(id))
-    .map(([id, v], n) => ({
+    .map(([id, v], n) => {
+      let lastKind: boolean | null = null;
+      return {
       name: nameOf(id),
       type: "line",
       showSymbol: false,
@@ -32,8 +34,17 @@ const option = computed(() => {
         type: chart.lineType(id),
       },
       itemStyle: { color: chart.runtimeColor(id, indexOf(id)) },
-      data: s!.timestamps.slice(first).map((t, i) => [t, v.total[first + i]])
-        .filter(([, total]) => total != null),
+      // Totals from runs that scored real projects aren't on the same scale as those from runs
+      // that didn't, so the line breaks where that changes.
+      data: s!.timestamps.slice(first).flatMap((t, i) => {
+        const total = v.total[first + i];
+        if (total == null) return [];
+        const kind = s!.projectRuns?.[first + i] ?? false;
+        const point: [string, number | null][] = [[t, total]];
+        if (kind !== lastKind && lastKind !== null) point.unshift([t, null]);
+        lastKind = kind;
+        return point;
+      }),
       markLine: n === 0 && revisions.length
         ? {
           silent: true,
@@ -47,7 +58,8 @@ const option = computed(() => {
           data: revisions.map((t) => ({ xAxis: t })),
         }
         : undefined,
-    }));
+    };
+    });
   return chart.narrow({
     ...chart.base(),
     grid: {

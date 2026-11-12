@@ -4,9 +4,11 @@ import { RUNTIME_DIR } from "../paths.ts";
 import { COMPILER_VARIANTS } from "../variants.ts";
 import { run } from "../webbundle.ts";
 import {
+  canReplay,
   compile,
   headlessCommand,
   REPO,
+  replayCommand,
   windowCommand,
 } from "./oscratchl-shared.ts";
 import { oscratchlHistory } from "./oscratchl-history.ts";
@@ -54,6 +56,13 @@ const source = async (
   return { dir, own: false };
 };
 
+/** Gives the headless launcher a replay command when this build has replay mode. */
+const offerReplay = () => {
+  oscratchl.headless!.replay = canReplay(binary!)
+    ? (sb3, r, v) => replayCommand(binary!, sb3, r, runtimeSource, v)
+    : undefined;
+};
+
 export const oscratchl: Runtime = {
   id: "oscratchl",
   name: "oscratchl",
@@ -66,6 +75,7 @@ export const oscratchl: Runtime = {
       if (!fs.existsSync(binary)) {
         throw new Error(`OSCRATCHL_BINARY ${binary} does not exist`);
       }
+      offerReplay();
       return {
         version: "custom",
         detail: { binary },
@@ -103,6 +113,7 @@ export const oscratchl: Runtime = {
       );
     }
 
+    offerReplay();
     const binaryTime = fs.statSync(binary).mtimeMs;
     const commitTime =
       Number(await git(dir, "log", "-1", "--format=%ct", "HEAD")) * 1000;
@@ -121,6 +132,8 @@ export const oscratchl: Runtime = {
   },
   headless: {
     command: (sb3, v) => headlessCommand(binary!, sb3, runtimeSource, v),
+    // Set up by setup(), for builds with replay mode.
+    replay: undefined,
   },
   gui: {
     display: true,

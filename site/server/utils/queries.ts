@@ -1,6 +1,12 @@
 import {
+  geometricMean,
   type Medians,
   SCORE_VERSION,
+  PROJECT_REFERENCE,
+  type ProjectScores,
+  referenceFor,
+  referenceRate,
+  relativeSpeed,
   scoreRuntime,
   type WeightMode,
 } from "../../shared/scoring.ts";
@@ -11,6 +17,7 @@ import type {
   Latest,
   LatestRuntime,
   Meta,
+  ProjectResult,
   RuntimeInfo,
   ScoreHistory,
   ScoreSeries,
@@ -259,12 +266,45 @@ export const buildScores = (
 ): ScoreHistory => {
   const host = resolveHost(ds, q.host);
   const weights = q.weights ?? "default";
-  const perf = forHost(ds, host, q.separate).filter(hasPerformance);
+  const entries = forHost(ds, host, q.separate);
+  const perf = entries.filter(hasPerformance);
+  // Each run's project scores by runtime, against that run's reference replays. A run counts as
+  // having projects when the reference has a comparable replay; there, a runtime without replays
+  // gets all nulls (so no total: it can't be compared with the others), and runs without (older
+  // runs, results from before replays had checkpoints) keep the benchmarks' total.
+  const replaysByRun = new Map<string, Record<string, Record<string, ProjectResult>>>();
+  for (const e of entries.filter(hasProjects)) {
+    const run = replaysByRun.get(e.runId) ?? {};
+    run[e.runtime.id] = e.projects!;
+    replaysByRun.set(e.runId, run);
+  }
+  const projectScores = new Map<string, Record<string, ProjectScores>>();
+  for (const [runId, run] of replaysByRun) {
+    const ids = Object.keys(run[PROJECT_REFERENCE] ?? {}).filter((id) => referenceFor(id, run));
+    if (!ids.length) continue;
+    const scale = geometricMean(ids.map((id) => ({ value: referenceRate(referenceFor(id, run)) ?? 0, weight: 1 })));
+    if (scale === null) continue;
+    const byRuntime: Record<string, ProjectScores> = {};
+    for (const runtime of new Set([...Object.keys(run), ...perf.filter((e) => e.runId === runId).map((e) => e.runtime.id)])) {
+      byRuntime[runtime] = {
+        scale,
+        speeds: Object.fromEntries(ids.map((id) => [id, relativeSpeed(run[runtime]?.[id], referenceFor(id, run))])),
+      };
+    }
+    projectScores.set(runId, byRuntime);
+  }
   const timestamps = [...new Set(perf.map((e) => e.timestamp))]
     .filter((t) => (!q.from || t >= q.from) && (!q.to || t <= q.to))
     .sort();
   const index = new Map(timestamps.map((t, i) => [t, i]));
 
+  // Whether each run scored projects: totals from a run that did and one that didn't aren't on one
+  // scale, so the site never compares them.
+  const projectRuns = timestamps.map(() => false);
+  for (const e of perf) {
+    const i = index.get(e.timestamp);
+    if (i !== undefined && projectScores.has(e.runId)) projectRuns[i] = true;
+  }
   const suiteHashes: (string | null)[] = timestamps.map(() => null);
   const runtimes: Record<string, ScoreSeries> = {};
   const blank = () => timestamps.map(() => null as number | null);
@@ -275,9 +315,15 @@ export const buildScores = (
       total: blank(),
       coverage: blank(),
       categories: Object.fromEntries(CATEGORY_IDS.map((c) => [c, blank()])),
+      projects: blank(),
     });
     suiteHashes[i] ??= e.suiteHash || null;
-    const score = scoreRuntime(mediansOf(e), weights);
+    const score = scoreRuntime(
+      mediansOf(e),
+      weights,
+      projectScores.get(e.runId)?.[e.runtime.id],
+    );
+    s.projects[i] = sig(score.projects?.score);
     s.total[i] = sig(score.total);
     s.coverage[i] = sig(score.coverage, 3);
     for (const c of CATEGORY_IDS) {
@@ -290,6 +336,7 @@ export const buildScores = (
     weights,
     scoreVersion: SCORE_VERSION,
     timestamps,
+    projectRuns,
     suiteHashes,
     runtimes,
   };

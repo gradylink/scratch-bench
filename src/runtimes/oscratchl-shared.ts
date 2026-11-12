@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { run } from "../webbundle.ts";
-import type { Command, Variant } from "./types.ts";
+import type { Command, Replay, Variant } from "./types.ts";
 
 export const REPO = "https://git.rotur.dev/Mist/oscratchl.git";
 
@@ -81,6 +81,43 @@ export const headlessCommand = (
   cwd: path.dirname(bin),
   projectLine: PROJECT_LINE,
 });
+
+/** A replay of a recording (projects/REPLAY.md), headless, in the same program as a normal run. */
+export const replayCommand = (
+  bin: string,
+  sb3: string,
+  r: Replay,
+  runtimeSource?: string,
+  variant?: Variant | null,
+): Command => ({
+  cmd: [
+    ...program(bin, sb3, runtimeSource, variant),
+    "--replay",
+    r.recording,
+    "--replay-id",
+    r.id,
+    "--replay-budget",
+    String(r.budgetMs),
+  ],
+  cwd: path.dirname(bin),
+  projectLine: /^\[PROJECT\] (.*)$/,
+});
+
+/**
+ * Whether a build of oscratchl has replay mode as projects/REPLAY.md now describes it (older ones
+ * would take the flags for the project; the first builds with it kept time in seconds and failed a
+ * cut replay rather than bounding it). The bound's template is only in builds since.
+ */
+export const canReplay = (bin: string): boolean => {
+  try {
+    const built = fs.readFileSync(bin);
+    // A cut replay's bound ({next}:{script}) and the state at each checkpoint (BENCH_STATE_DUMP)
+    // came in that order; a build with neither or only the first can't be compared.
+    return built.includes("--replay-budget") && built.includes("{next}:{script}") && built.includes("BENCH_STATE_DUMP");
+  } catch {
+    return false;
+  }
+};
 
 export const windowCommand = (
   bin: string,

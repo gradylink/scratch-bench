@@ -3,6 +3,7 @@ import http from "http";
 import path from "path";
 import { createRequire } from "module";
 import { chromium } from "playwright-core";
+import { replayInPage, separateIds } from "./replay-runner.mjs";
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(import.meta.dirname, "..");
@@ -30,6 +31,11 @@ if (!KINDS.includes(kind) || !file) {
   );
   process.exit(2);
 }
+
+// With a recording, the project is replayed against it (index.html `replay`) instead of run.
+const recording = process.env.BENCH_RECORDING;
+const replayId = process.env.BENCH_REPLAY_ID ?? "project";
+const budgetMs = Number(process.env.BENCH_REPLAY_BUDGET_MS ?? 60_000);
 
 const bundleDir = process.env.BENCH_BUNDLE_DIR ??
   path.join(root, ".cache/runtimes/web", kind);
@@ -71,7 +77,9 @@ const server = http.createServer((req, res) => {
   if (url === "/" || url === "/index.html") {
     p = path.join(root, "runtimes/chromium/index.html");
   } else if (url === "/audio.js") p = audioPath;
+  else if (url === "/replay.js") p = path.join(root, "runtimes/replay.js");
   else if (url === "/project.sb3") p = path.resolve(file);
+  else if (url === "/recording.json" && recording) p = path.resolve(recording);
   else if (url.startsWith("/node_modules/")) p = path.join(root, url);
   else if (url.startsWith("/web/")) p = path.join(bundleDir, url.slice(5));
   else if (/^\/(chunks|assets)\//.test(url)) {
@@ -97,7 +105,8 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, {
         "Content-Type": types[path.extname(p)] || "application/octet-stream",
       });
-      res.end(d);
+      const script = recording && p.endsWith(".js") && /^\/(web|node_modules|chunks|assets)\//.test(url);
+      res.end(script ? separateIds(d.toString("utf8")) : d);
     }
   });
 }).listen(0, "127.0.0.1", async () => {
@@ -131,6 +140,16 @@ const server = http.createServer((req, res) => {
     });
   });
   const compiler = process.env.BENCH_COMPILER !== "0";
+  if (recording) {
+    await replayInPage(page, { recording, replayId, budgetMs }, () =>
+      page.evaluate(
+        ([k, s, c, id, b, d]) => window.replay(k, s, c, id, b, d),
+        [kind, scripts, compiler, replayId, budgetMs, process.env.BENCH_REPLAY_DRAW === "1"],
+      ));
+    await browser.close();
+    server.close();
+    process.exit(0);
+  }
   await page.evaluate(([k, s, c]) => window.start(k, s, c), [
     kind,
     scripts,

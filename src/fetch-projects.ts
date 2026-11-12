@@ -1,12 +1,12 @@
 // usage: bun run fetch-projects
-// Downloads the projects in projects/manifest.json from scratch.mit.edu into .cache/projects as sb3
-// files. A project whose project.json no longer matches the manifest's sha256 was edited after it
-// was recorded, so it is skipped rather than replayed against the wrong version.
+// Downloads the projects in projects/manifest.json into .cache/projects. The files are the ones the
+// recordings were made with, as TurboWarp's pianola benchmark keeps them (github.com/TurboWarp/pianola):
+// each is named by its SHA-256, which the download is checked against.
 import fs from "node:fs";
 import { manifest, PROJECT_FILES, projectFile, type ProjectEntry } from "./projects.ts";
-import { unzip, zip } from "./sb3.ts";
 
 const UA = { "User-Agent": "scratch-bench (github.com/gradylink/scratch-bench)" };
+const BLOBS = "https://blobs.turbowarp.xyz/benchmarks/v1";
 
 const get = async (url: string): Promise<Uint8Array> => {
   for (let attempt = 1; ; attempt++) {
@@ -26,37 +26,12 @@ const get = async (url: string): Promise<Uint8Array> => {
 
 const sha256 = (data: Uint8Array) => new Bun.CryptoHasher("sha256").update(data).digest("hex");
 
-/** Written whole or not at all, so an interrupted fetch never leaves a broken sb3 behind. */
-const save = (id: string, data: Uint8Array) => {
-  fs.writeFileSync(`${projectFile(id)}.part`, data);
-  fs.renameSync(`${projectFile(id)}.part`, projectFile(id));
-};
-
-const fetchProject = async (id: string, want: string): Promise<string> => {
-  const meta = JSON.parse(
-    new TextDecoder().decode(await get(`https://api.scratch.mit.edu/projects/${id}`)),
-  );
-  const raw = await get(`https://projects.scratch.mit.edu/${id}?token=${meta.project_token}`);
-  const isZip = raw[0] === 0x50 && raw[1] === 0x4b;
-  const json = isZip ? unzip(raw).get("project.json") : raw;
-  if (!json) throw new Error("no project.json in the downloaded sb3");
-  if (sha256(json) !== want) return "changed since it was recorded, skipped";
-  if (isZip) {
-    save(id, raw);
-    return "fetched";
-  }
-  const project = JSON.parse(new TextDecoder().decode(json));
-  const assets = new Map<string, Uint8Array>();
-  for (const target of project.targets) {
-    for (const asset of [...target.costumes, ...target.sounds]) {
-      const name = asset.md5ext ?? `${asset.assetId}.${asset.dataFormat}`;
-      if (!assets.has(name)) {
-        assets.set(name, await get(`https://assets.scratch.mit.edu/internalapi/asset/${name}/get/`));
-      }
-    }
-  }
-  save(id, zip([["project.json", json], ...assets]));
-  return "fetched";
+const fetchProject = async (p: ProjectEntry) => {
+  const data = await get(`${BLOBS}/${p.sha256}.sb3`);
+  if (sha256(data) !== p.sha256) throw new Error("the download doesn't match its SHA-256");
+  // Written whole or not at all, so an interrupted fetch never leaves a broken sb3 behind.
+  fs.writeFileSync(`${projectFile(p)}.part`, data);
+  fs.renameSync(`${projectFile(p)}.part`, projectFile(p));
 };
 
 /** Fetches the projects not downloaded yet. */
@@ -65,25 +40,26 @@ export const fetchProjects = async (
   log: (line: string) => void,
 ): Promise<void> => {
   fs.mkdirSync(PROJECT_FILES, { recursive: true });
-  const missing = wanted.filter((p) => !fs.existsSync(projectFile(p.id)));
+  const missing = wanted.filter((p) => !fs.existsSync(projectFile(p)));
   let next = 0;
   const worker = async () => {
     while (next < missing.length) {
       const p = missing[next++];
       try {
-        log(`${p.id} ${p.title}: ${await fetchProject(p.id, p.sha256)}`);
+        await fetchProject(p);
+        log(`${p.id} ${p.title}: fetched`);
       } catch (e) {
         log(`${p.id} ${p.title}: ${(e as Error).message}`);
       }
     }
   };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  await Promise.all(Array.from({ length: 4 }, worker));
 };
 
 if (import.meta.main) {
   const wanted = manifest();
   await fetchProjects(wanted, console.log);
-  const have = wanted.filter((p) => fs.existsSync(projectFile(p.id))).length;
+  const have = wanted.filter((p) => fs.existsSync(projectFile(p))).length;
   console.log(`${have} of ${wanted.length} projects in ${PROJECT_FILES}`);
   process.exit(have ? 0 : 1);
 }

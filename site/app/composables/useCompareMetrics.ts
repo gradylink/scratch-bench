@@ -19,7 +19,7 @@ export const useCompareMetrics = () => {
       label: "Speed",
       better: "higher",
       fmt: fmtOps,
-      value: (id) => lastValue(scores.value?.runtimes[id]?.total),
+      value: (id) => lastTotal(scores.value, scores.value?.runtimes[id]?.total),
     },
     {
       id: "startup",

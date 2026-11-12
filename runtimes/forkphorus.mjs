@@ -4,6 +4,7 @@ import fs from "fs";
 import http from "http";
 import path from "path";
 import { chromium } from "playwright-core";
+import { replayInPage } from "./replay-runner.mjs";
 
 process.stdout.on("error", () => process.exit(0));
 const [dir, file] = process.argv.slice(2);
@@ -36,8 +37,40 @@ const types = {
   ".css": "text/css",
 };
 
+// With a recording, the project is replayed against it (bench.html `replay`) instead of run.
+const recording = process.env.BENCH_RECORDING;
+const replayId = process.env.BENCH_REPLAY_ID ?? "project";
+const budgetMs = Number(process.env.BENCH_REPLAY_BUDGET_MS ?? 60_000);
+
+// The frame loop keeps stepping while under a frame's time and nothing asked for a redraw; a replay
+// makes exactly the number of passes the recording made instead (window.__benchFrame), redraw or
+// not, so every runtime does the same work.
+const FRAME_LOOP =
+  /while \(\(this\.isTurbo \|\| !VISUAL\) && Date\.now\(\) - start < 1000 \/ this\.framerate && queue\.length\)/;
+const patchFrameLoop = (js) =>
+  "var __benchMore = function (go, threads) { var f = window.__benchFrame; f.passes++; " +
+  "return !!(go && threads && f.passes < f.target); };\n" +
+  js.replace(FRAME_LOOP, "while (__benchMore(true, queue.length))");
+
 const server = http.createServer((req, res) => {
   const url = decodeURIComponent(req.url.split("?")[0]);
+  if (recording && url === "/phosphorus.dist.js") {
+    const js = fs.readFileSync(path.join(dir, "phosphorus.dist.js"), "utf8");
+    if (!FRAME_LOOP.test(js)) {
+      res.writeHead(500).end();
+      return;
+    }
+    res.writeHead(200, { "Content-Type": types[".js"] }).end(patchFrameLoop(js));
+    return;
+  }
+  if (url === "/__replay.js") {
+    fs.readFile(path.join(import.meta.dirname, "replay.js"), (e, d) => res.writeHead(e ? 404 : 200, { "Content-Type": types[".js"] }).end(d));
+    return;
+  }
+  if (recording && url === "/__recording.json") {
+    fs.readFile(path.resolve(recording), (e, d) => res.writeHead(e ? 404 : 200, { "Content-Type": types[".json"] }).end(d));
+    return;
+  }
   // The bench page and project sit at the root, so relative URLs (the player, its fonts and sounds) resolve to the
   // checkout as they would on forkphorus' own site.
   const p = url === "/__bench.html"
@@ -95,6 +128,16 @@ const server = http.createServer((req, res) => {
     });
   });
   await tab.goto(`http://127.0.0.1:${server.address().port}/__bench.html`);
+  if (recording) {
+    await replayInPage(tab, { recording, replayId, budgetMs }, () =>
+      tab.evaluate(
+        ([s, id, b, d]) => window.replay(s, id, b, d),
+        [pageScripts, replayId, budgetMs, process.env.BENCH_REPLAY_DRAW === "1"],
+      ));
+    await browser.close();
+    server.close();
+    process.exit(0);
+  }
   await tab.evaluate((scripts) => window.start(scripts), pageScripts);
   await finished;
   await browser.close();

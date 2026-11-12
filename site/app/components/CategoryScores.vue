@@ -16,7 +16,7 @@ const rows = computed(() => {
     .map(([id, series]) => ({
       id,
       name: nameOf(id),
-      total: lastValue(series.total),
+      total: lastTotal(s, series.total),
       categories: Object.fromEntries(
         CATEGORY_IDS.map((c) => [c, lastValue(series.categories[c])]),
       ) as Record<string, number | null>,

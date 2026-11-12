@@ -5,13 +5,13 @@ import "./cleanup.ts";
 import { buildSuite, type Built } from "./build.ts";
 import { type DisplayKind, startDisplay } from "./display.ts";
 import { hostInfo, repoInfo } from "./hostinfo.ts";
-import { measureSuite, statsOf } from "./measure-suite.ts";
+import { combineReplays, measureSuite, statsOf } from "./measure-suite.ts";
 import { RESULTS_DIR } from "./paths.ts";
 import { renderReport, type SuiteResult } from "./report.ts";
 import { selectRuntimes } from "./runtimes/index.ts";
 import type { Runtime, SetupInfo, Variant } from "./runtimes/types.ts";
 import { summarize } from "./stats.ts";
-import { selectSuites, type Suite } from "./suites.ts";
+import { type ProjectRun, selectSuites, type Suite } from "./suites.ts";
 import {
   infoOf,
   labelOf,
@@ -27,9 +27,9 @@ const USAGE = `usage: bun run bench [setup] [options]
   --suite a,b             suites to run: performance, parity, projects (default: all)
   --runs N                runs per runtime for the performance suite (default 10)
   --parity-runs N         runs per runtime for the parity suite (default 1)
-  --project-runs N        runs per runtime for the projects suite (default 1)
+  --project-runs N        runs of each project for the projects suite (default 3; the medians count)
   --timeout S             seconds before a run is killed (default 300; for the projects suite, each
-                          project's budget plus 2 minutes)
+                          project's budget plus 140 s)
   --display x11|wayland   virtual display backend for rendered native runs (default x11)
   --no-variants           run each runtime in its default VM mode only (not compiler and interpreter, bytecode and not)
   --offline               don't use the network; use cached runtime downloads
@@ -133,7 +133,18 @@ const main = async (): Promise<number> => {
   const repo = repoInfo();
   const results: SuiteResult[] = [];
 
+  const save = (full: SuiteResult) =>
+    fs.writeFileSync(
+      path.join(outDir, resultFileName(full.suite.id, full.runtime.id, full.runtime.variant ?? null)),
+      JSON.stringify(full, null, 2) + "\n",
+    );
   for (const suite of suites) {
+    const b = built.get(suite.id)!;
+    if (suite.id === "projects" && !(b instanceof Error) && b.projects) {
+      const done = await runProjects(suite, runtimes, b, setups, timeoutMs, (result) => save({ ...result, timestamp, host, repo }));
+      results.push(...done.map((r) => ({ ...r, timestamp, host, repo })));
+      continue;
+    }
     for (const rt of runtimes) {
       const setup = setups.get(rt.id)!;
       for (
@@ -188,14 +199,99 @@ const main = async (): Promise<number> => {
     : 0;
 };
 
-const runSuite = async (
+type Result = Omit<SuiteResult, "timestamp" | "host" | "repo">;
+
+/**
+ * The projects suite. Every runtime replays every project once a round, the runtimes in turn for
+ * each project (in an order that moves along a place each project and each round), for as many
+ * rounds as runs:
+ * whatever else the machine is doing then falls on all of them about alike, rather than on
+ * whichever runtime's turn it was, and on the reference above all. Each runtime's results are
+ * written after every round, so a run stopped early keeps the rounds it finished.
+ */
+const runProjects = async (
+  suite: Suite,
+  runtimes: Runtime[],
+  built: Built,
+  setups: Map<string, SetupInfo | Error>,
+  timeoutMs: number,
+  save: (result: Result) => void,
+): Promise<Result[]> => {
+  const projects = built.projects!;
+  const done: Result[] = [];
+  const plans: (Prepared & { replays: Record<string, ProjectRun[]>; errors: Record<string, string> })[] = [];
+  for (const rt of runtimes) {
+    const setup = setups.get(rt.id)!;
+    for (const variant of variantsToRun(setupVariants(setup), false)) {
+      const prepared = prepare(suite, rt, built, setup, timeoutMs, variant);
+      if ("result" in prepared) {
+        save(prepared.result);
+        done.push(prepared.result);
+      } else {
+        plans.push({ ...prepared, replays: {}, errors: {} });
+      }
+    }
+  }
+  const rounds = Math.max(0, ...plans.map((p) => p.options.runs));
+  const resultsOf = (plan: (typeof plans)[number], round: number) =>
+    Object.fromEntries(projects.map((p) => [p.id, {
+      title: p.title,
+      // Every runner hashes the state the same way (projects/REPLAY.md, "State").
+      hash_kind: "state",
+      recorded_frames: p.frames,
+      ...(combineReplays(plan.replays[p.id] ?? [], round, plan.errors[p.id]) as object),
+    }]));
+  for (let round = 1; round <= rounds; round++) {
+    for (const [n, p] of projects.entries()) {
+      log(`projects round ${round}/${rounds}: ${p.id} ${p.title}`);
+      const shift = (round - 1 + n) % plans.length;
+      const order = [...plans.slice(shift), ...plans.slice(0, shift)];
+      for (const plan of order) {
+        const replay = { recording: p.recording, id: p.id, budgetMs: p.durationMs };
+        const replaying = {
+          ...plan.launcher,
+          command: (sb3: string, v?: Variant | null) => plan.launcher.replay!(sb3, replay, v),
+        };
+        const measured = await measureSuite(suite, replaying, p.sb3, {
+          ...plan.options,
+          runs: 1,
+          log: (line) => log(`  ${plan.label}: ${line.trim().replace(/^run 1\/1: /, "")}`),
+        });
+        plan.base.runs.push(...measured.runs);
+        plan.base.runtime.display = measured.display;
+        const run = measured.runs[0];
+        const data = run?.data as Record<string, ProjectRun> | undefined;
+        (plan.replays[p.id] ??= []).push(...Object.values(data ?? {}));
+        if (!run?.ok) plan.errors[p.id] ??= run?.error ?? "no result";
+      }
+    }
+    for (const plan of plans) {
+      plan.base.stats = statsOf(plan.base.runs);
+      plan.base.results = resultsOf(plan, round);
+      save(plan.base);
+    }
+  }
+  // In the runtimes' order, as the other suites report them.
+  const order = (r: Result) => runtimes.findIndex((rt) => rt.id === r.runtime.id);
+  return [...done, ...plans.map((p) => p.base)].sort((a, b) => order(a) - order(b));
+};
+
+type Prepared = {
+  base: Result;
+  launcher: NonNullable<Runtime["gui"]>;
+  label: string;
+  options: Parameters<typeof measureSuite>[3];
+};
+
+/** Which of a runtime's launchers runs a suite, and how; or its result, if it can't. */
+const prepare = (
   suite: Suite,
   rt: Runtime,
   built: Built | Error,
   setup: SetupInfo | Error,
   timeoutMs: number,
   variant: Variant | null,
-): Promise<Omit<SuiteResult, "timestamp" | "host" | "repo">> => {
+): Prepared | { result: Result } => {
   const label = labelOf(rt.name, variant && infoOf(variant));
   const base = {
     schema_version: 1 as const,
@@ -216,7 +312,7 @@ const runSuite = async (
   };
   const fail = (error: string) => {
     log(`${suite.id} / ${label}: ${error}`);
-    return { ...base, error };
+    return { result: { ...base, error } };
   };
   if (built instanceof Error) {
     return fail(`suite build failed: ${built.message}`);
@@ -231,7 +327,8 @@ const runSuite = async (
     kind = "gui";
     launcher = rt.gui;
   }
-  if (!launcher && suite.anyLauncher && rt.headless) {
+  // Replays go to whichever launcher can do them (a native runtime's is headless).
+  if (suite.id === "projects" && !launcher?.replay && rt.headless?.replay) {
     kind = "headless";
     launcher = rt.headless;
   }
@@ -240,7 +337,12 @@ const runSuite = async (
       ? "no rendered (gui) launcher for this runtime yet"
       : `no ${suite.launcher} launcher`;
     log(`${suite.id} / ${label}: skipped, ${skipped}`);
-    return { ...base, skipped };
+    return { result: { ...base, skipped } };
+  }
+  if (suite.id === "projects" && !launcher.replay) {
+    const skipped = "can't replay recordings yet (projects/REPLAY.md)";
+    log(`${suite.id} / ${label}: skipped, ${skipped}`);
+    return { result: { ...base, skipped } };
   }
   base.runtime.launcher = kind;
 
@@ -259,25 +361,21 @@ const runSuite = async (
     displayKind: opts.display as DisplayKind,
     log,
   };
-  if (built.projects) {
-    // Each project is its own sb3 and its own run of the runtime.
-    const results: Record<string, unknown> = {};
-    for (const p of built.projects) {
-      log(`  ${p.id} ${p.title}`);
-      const measured = await measureSuite(suite, launcher, p.sb3, options);
-      base.runs.push(...measured.runs);
-      base.runtime.display = measured.display;
-      results[p.id] = {
-        recorded_ms: p.recordedMs,
-        recorded_ticks: p.ticks,
-        ...(measured.results as object),
-      };
-    }
-    base.stats = statsOf(base.runs);
-    base.results = results;
-    return base;
-  }
-  const measured = await measureSuite(suite, launcher, built.sb3, options);
+  return { base, launcher, label, options };
+};
+
+const runSuite = async (
+  suite: Suite,
+  rt: Runtime,
+  built: Built | Error,
+  setup: SetupInfo | Error,
+  timeoutMs: number,
+  variant: Variant | null,
+): Promise<Result> => {
+  const prepared = prepare(suite, rt, built, setup, timeoutMs, variant);
+  if ("result" in prepared) return prepared.result;
+  const { base, launcher, options } = prepared;
+  const measured = await measureSuite(suite, launcher, (built as Built).sb3, options);
   base.runs = measured.runs;
   base.stats = measured.stats;
   base.results = measured.results;

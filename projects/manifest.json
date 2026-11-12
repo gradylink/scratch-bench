@@ -1,38 +1,74 @@
 [
  {
-  "id": "318213127",
-  "title": "Scratch Bloons TD",
-  "author": "ggenije",
-  "sha256": "4e3b4651119968bc41974d4e0c1cebc0a3f7d1c44999f115e6266cc1cf63b44a"
+  "id": "1274137785",
+  "title": "SGBE Gameboy emulator V1.20",
+  "author": "Iwokeuppls",
+  "sha256": "195f4e0dc3ca48626512eff25e0836734497b8ee6a079be8ef3541109f6a4dd1"
  },
  {
-  "id": "324569477",
-  "title": "Doom v0.2.4",
-  "author": "Vadik1",
-  "sha256": "9321c52286eeb965189b75c333fdf154aae601c411794454adfe61ae2236a5de"
+  "id": "650322979",
+  "title": "NES Emulator v1.1.1",
+  "author": "SpinningCube",
+  "sha256": "ede5155af1c2d3152b990a6a71cc65d3efaa932a87da93de74f9fa34ff9771ea"
+ },
+ {
+  "id": "531881458",
+  "title": "BBC Model B Emulator (with 60+ games)",
+  "author": "RokCoder",
+  "sha256": "0ca5bc9d9cf4eb70977132abacf555c7f14489b7c539290b3df7631254f8c098"
  },
  {
   "id": "475073453",
   "title": "Navier Stokes Fluid Simulation",
   "author": "uiopscratch327",
-  "sha256": "09316e6dd779a460e0ab9d076dc4cd5e0918b8af05d3d5ff7431978800d9b952"
+  "sha256": "818f59da539f7d2618924512c8d52ae661fadfb1898b6342b2b1b0a885c5949e"
  },
  {
-  "id": "1201938491",
-  "title": "Linux 6.1.14-rv32ima On Scratch",
-  "author": "Tacodiva7729",
-  "sha256": "0558aa7369cfd8c577714d7a2c8ded0dc8f5add41ddf20e4c448afc3155e4511"
+  "id": "1059423894",
+  "title": "Particle Lenia",
+  "author": "RokCoder",
+  "sha256": "270110d3748afdd47ded0b4d7d17fe3ed29112b2ab6da8e0750416d542fad684"
  },
  {
-  "id": "1274137785",
-  "title": "SGBE Gameboy emulator V1.20",
-  "author": "Iwokeuppls",
-  "sha256": "893c6f7367aef4e1164637c6b85b76280e1074cba9486588a1f58a57bad772f3"
+  "id": "1143869507",
+  "title": "Conway's game of life V9.9 [featuring Hashlife]",
+  "author": "scratch99911",
+  "sha256": "1b96aafc5871466ea9850b14d8fbde147f410dff55fb01fc21f5086efacd00d5"
  },
  {
-  "id": "1312523445",
-  "title": "Glue3D Maze Demo",
-  "author": "xX_Badiboop4_Xx",
-  "sha256": "39d49528641424af2f66283450f27cc64a683cebf5a1b177792c1861efbf68a2"
+  "id": "621621130",
+  "title": "Flow field pathfinding",
+  "author": "ThatHammerkind",
+  "sha256": "91cc0ae71417b7cff76729c08a8b87a49dac940c5aa5abb99ae2cee6652a28d4"
+ },
+ {
+  "id": "1137819146",
+  "title": "Pretty fast 3D renderer v2.5.9",
+  "author": "extremely_random_guy",
+  "sha256": "745c6127e567c6aacc1db723ce42ae0401482811724aee2dce19ef1b1d34fb8e"
+ },
+ {
+  "id": "425324462",
+  "title": "[Discontinued] 3D Obj Importer",
+  "author": "Plokie",
+  "sha256": "2eb3bfcc75e378c678a457c7981bd6014ffaf7380b840ffb2d4851d77aae60f2"
+ },
+ {
+  "id": "1146991627",
+  "title": "Goopy Tech Demo",
+  "author": "Boxset",
+  "sha256": "d99e5070c6e93e2e6a0e60ca0cbe7adbf5cbf8d61cb9917d6a49e090d4ab593d"
+ },
+ {
+  "id": "318213127",
+  "title": "Scratch Bloons TD",
+  "author": "ggenije",
+  "sha256": "2477a5f1428078cadb92d2381d28ed3bb1e205463bf1d730fc0ad70d85522408"
+ },
+ {
+  "id": "324569477",
+  "title": "Doom v0.2.4",
+  "author": "Vadik1",
+  "sha256": "bc05ef60e7f9b71a65628d29cd4a750f4abac8f81eddf75a83bc0dc7498ae83e"
  }
 ]

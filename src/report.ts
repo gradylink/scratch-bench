@@ -4,6 +4,7 @@ import {
   SCORE_VERSION,
   scoreRuntime,
 } from "../site/shared/scoring.ts";
+import { agreement, referenceFor, relativeSpeed } from "../site/shared/scoring.ts";
 import type { VariantInfo } from "./runtimes/types.ts";
 import type { Summary } from "./stats.ts";
 import { labelOf } from "./variants.ts";
@@ -162,50 +163,44 @@ export const renderReport = (results: SuiteResult[]): string => {
   );
   if (projects.length) {
     type Replayed = {
-      ms?: Summary;
-      recorded_ms?: number;
-      ticks?: number;
-      recorded_ticks?: number;
-      long_frames?: number;
+      title?: string;
+      hash_kind?: string;
+      frame_ms?: Summary;
+      frames?: number;
+      recorded_frames?: number;
+      drifted?: number;
+      hash?: string | null;
+      checkpoints?: Record<string, number>;
+      states?: Record<string, string>;
       error?: string;
     };
     const resultsOf = (r: SuiteResult) => (r.results as Record<string, Replayed>) ?? {};
-    // A headless launcher has no renderer and may not pace frames, so it isn't comparable.
-    const nameOf = (r: SuiteResult) =>
-      labelOf(r.runtime.name, r.runtime.variant) +
-      (r.runtime.launcher === "headless" ? " (headless)" : "");
+    const nameOf = (r: SuiteResult) => labelOf(r.runtime.name, r.runtime.variant);
     const ids = [...new Set(projects.flatMap((r) => Object.keys(resultsOf(r))))];
+    const byRuntime = Object.fromEntries(projects.map((r) => [r.runtime.id, resultsOf(r)]));
     out.push(
-      "Projects: median ms to replay each recording (recorded: the replayed frames at 30 fps; " +
-        "cut short: ticks reached)\n",
+      "Projects: speed against TurboWarp on the same frames (frames reached when it ran out of time; " +
+        "≠@n: its state stopped agreeing with TurboWarp's at frame n, so it's compared on the frames " +
+        "before; * drifted from the recorded passes)\n",
     );
     out.push(
       table(
-        ["project", "recorded", ...projects.map(nameOf)],
+        ["project", ...projects.map(nameOf)],
         ids.map((id) => [
-          id,
-          num(projects.map((r) => resultsOf(r)[id]?.recorded_ms).find((x) => x !== undefined) ?? NaN),
+          projects.map((r) => resultsOf(r)[id]?.title).find(Boolean) ?? id,
           ...projects.map((r) => {
             const p = resultsOf(r)[id];
             if (!p) return "-";
             if (p.error) return "error";
-            return p.ticks! < p.recorded_ticks!
-              ? `${p.ticks}/${p.recorded_ticks} ticks`
-              : `${num(p.ms!.median)}${p.long_frames ? ` (${p.long_frames} long frames)` : ""}`;
+            const reference = referenceFor(id, byRuntime);
+            const speed = relativeSpeed(p, reference);
+            const differs = agreement(p, reference)?.differs ?? null;
+            const reached = p.frames! < p.recorded_frames! ? ` (${p.frames}/${p.recorded_frames})` : "";
+            return `${differs !== null ? `≠@${differs} ` : ""}${p.drifted ? "*" : ""}${speed === null ? "-" : `${speed.toFixed(2)}×`}${reached}`;
           }),
         ]),
       ),
     );
-    out.push("");
-    for (const r of projects) {
-      const all = Object.values(resultsOf(r));
-      const done = all.filter((p) => !p.error && p.ticks === p.recorded_ticks);
-      out.push(
-        `${nameOf(r)}: ${done.length}/${all.length} replayed in full, ${
-          num(done.reduce((n, p) => n + p.ms!.median, 0))
-        } ms in total, ${all.filter((p) => p.error).length} errors`,
-      );
-    }
     out.push("");
   }
 

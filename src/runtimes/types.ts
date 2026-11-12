@@ -8,7 +8,19 @@ export interface Command {
 export interface Launcher {
   /** `variant` is the VM mode being run, for runtimes whose modes are different programs rather than an env var. */
   command(sb3: string, variant?: Variant | null): Command;
+  /**
+   * Replays a recording against the project (projects/REPLAY.md). Runtimes without it can't run the
+   * projects suite.
+   */
+  replay?(sb3: string, replay: Replay, variant?: Variant | null): Command;
   display?: boolean;
+}
+
+/** A recording to replay, and how long the replay may take. */
+export interface Replay {
+  recording: string;
+  id: string;
+  budgetMs: number;
 }
 
 export interface Variant {

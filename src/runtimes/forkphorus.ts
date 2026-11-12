@@ -3,6 +3,7 @@ import path from "node:path";
 import { endOfDay } from "../backfill/schedule.ts";
 import { ADAPTERS, CACHE, ROOT, RUNTIME_DIR } from "../paths.ts";
 import { run } from "../webbundle.ts";
+import { replayEnv } from "./node-vm.ts";
 import type { Command, HistoricLaunch, Pin, Runtime } from "./types.ts";
 
 // forkphorus is a JavaScript compiler for Scratch projects (not a scratch-vm fork). It runs in a browser, so both
@@ -109,7 +110,13 @@ export const forkphorus: Runtime = {
     return { version: commit.slice(0, 7), detail: { commit, repo: REPO } };
   },
   headless: { command: (sb3) => command(liveDir!, sb3) },
-  gui: { command: (sb3) => command(liveDir!, sb3) },
+  gui: {
+    command: (sb3) => command(liveDir!, sb3),
+    replay: (sb3, r) => ({
+      ...command(liveDir!, sb3),
+      env: { ...(process.env as Record<string, string>), ...replayEnv(r) },
+    }),
+  },
   history: {
     since: { performance: "2025-08-01", parity: "2025-08-01" },
     custom: {
